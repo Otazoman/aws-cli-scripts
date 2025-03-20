@@ -1,0 +1,4 @@
+REGION,NAME,IMAGEID,INSTANCETYPE,KEYNAME,SUBNETNAME,SECURITYGROUPNAMES,PRIVATEIPADDRESS,DISABLEAPITERMINATION,COST_TAG,VOLUMESIZE,VOLUMETYPE,ALLOCATEELASTICIP,ADDITIONALVOLUMESIZES,ADDITIONALVOLUMETYPES,IAMINSTANCEPROFILE,OSTYPE
+ap-northeast-1,TEST1,ami-0599b6e53ca798bb2,t3.micro,zabbix-key,handson-cli-vpc-private-subnet-a1,my-sg-1;my-sg-2,10.0.11.5,FALSE,Div-1,30,gp3,FALSE,,,,linux
+ap-northeast-1,TEST2,ami-0f2b7d16d1c8c53d0,t3.micro,zabbix-key,handson-cli-vpc-private-subnet-c1,my-sg-3,10.0.12.5,TRUE,Div2,30,gp3,TRUE,30;50,gp3,ec2-test-role,windows
+us-east-1,TEST1,ami-08b5b3a93ed654d19,t3.micro,us-key,subnet-0563d47f9536552b9,test-sg,,FALSE,Div3,30,gp3,FALSE,10;10,gp3,ec2-test-role,linux

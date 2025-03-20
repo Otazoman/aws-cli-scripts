@@ -1,0 +1,12 @@
+region,VPC_name,group_name,description,action,direction,protocol,from_port,to_port,source,rule_description
+ap-northeast-1,handson-cli-vpc,my-sg-1,My first security group1,add,ingress,tcp,22,22,0.0.0.0/0,SSH access
+ap-northeast-1,handson-cli-vpc,my-sg-1,My first security group1,add,egress,tcp,80,80,0.0.0.0/0,HTTP outbound
+ap-northeast-1,handson-cli-vpc,my-sg-1,My first security group1,add,ingress,-1,,,my-sg-3,Allow all
+ap-northeast-1,handson-cli-vpc,my-sg-2,My first security group2,add,ingress,tcp,22,22,0.0.0.0/0,SSH access
+ap-northeast-1,handson-cli-vpc,my-sg-2,My second security group2,add,ingress,tcp,80,80,10.0.0.0/16,HTTP outbound
+ap-northeast-1,handson-cli-vpc,my-sg-2,My second security group2,add,ingress,tcp,443,443,my-sg-1,HTTP inbound
+ap-northeast-1,handson-cli-vpc,my-sg-3,My third security group3,add,ingress,tcp,22,22,test_plefix_list,SSH access
+ap-northeast-1,handson-cli-vpc,my-sg-3,My third security group3,add,egress,-1,,,0.0.0.0/0,
+us-east-1,test1vpc,test-sg,Existing security group,add,ingress,tcp,3389,3389,10.0.2.0/24,exist
+us-east-1,test1vpc,test-sg,Existing security group,add,ingress,tcp,22,22,0.0.0.0/0,
+us-east-1,test1vpc,test-sg,Existing security group,add,ingress,tcp,443,443,0.0.0.0/0,add

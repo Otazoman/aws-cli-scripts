@@ -1,105 +1,202 @@
 #!/bin/bash
 
-set -e
-
-# コマンドライン引数からCSVファイル名を取得
-if [ $# -ne 1 ]; then
-    echo "Usage: $0 <csv-file>"
+# スクリプト実行時にファイル名を指定
+if [ -z "$1" ]; then
+    echo "Usage: $0 <rules-file>" >&2
     exit 1
 fi
 
-CSV_FILE="$1"
+RESOURCE_FILE=$1
 
-# ヘッダー行を読み飛ばす
-HEADER=$(head -n 1 "$CSV_FILE")
+# リソースファイルが存在するか確認
+if [ ! -f "$RESOURCE_FILE" ]; then
+    echo "エラー: ファイル $RESOURCE_FILE が見つかりません。"
+    exit 1
+fi
 
-# 2行目以降（実データ）を処理
-tail -n +2 "$CSV_FILE" | while IFS=, read -r REGION NAME IMAGEID INSTANCETYPE KEYNAME SUBNETNAME SECURITYGROUPNAMES PRIVATEIPADDRESS DISABLEAPITERMINATION COST_TAG VOLUMESIZE VOLUMETYPE ALLOCATEELASTICIP ADDITIONALVOLUMESIZES ADDITIONALVOLUMETYPES IAMINSTANCEPROFILE OSTYPE
-do
-    echo "Instance $NAME setup start in region $REGION"
+# リソースファイルを読み込み、ヘッダーをスキップ
+RESOURCES=()
+while IFS= read -r line; do
+    if [[ ! "$line" =~ ^REGION ]]; then
+        RESOURCES+=("$line")
+    fi
+done < "$RESOURCE_FILE"
 
-    # AWSリージョンを設定
-    AWS_REGION="$REGION"
+# リージョンごとの処理
+for RESOURCE in "${RESOURCES[@]}"; do
+    IFS=',' read -r REGION VPC_NAME VPC_CIDR SUBNET_CIDR AZ TYPE NAME ROUTE_TABLE_NAME COST_TAG <<< "${RESOURCE}"
+    
+    # リージョンが切り替わった場合、変数をリセット
+    if [ "$REGION" != "$CURRENT_REGION" ]; then
+        unset PROCESSED_VPCS
+        unset ROUTE_TABLES
+        unset NAT_GATEWAYS
+        unset FIRST_PUBLIC_SUBNETS
+    
+        echo "リージョンが切り替わりました: ${REGION}"
+        CURRENT_REGION=$REGION
+        declare -A PROCESSED_VPCS
+        declare -A ROUTE_TABLES
+        declare -A NAT_GATEWAYS
+        declare -A FIRST_PUBLIC_SUBNETS
+    fi
 
-    # OSタイプに応じたデバイス名の設定
-    case "$OSTYPE" in
-        linux)
-            ROOT_DEVICE_NAME="/dev/xvda"
-            ADDITIONAL_DEVICE_PREFIX="/dev/xvd"
-            ;;
-        windows)
-            ROOT_DEVICE_NAME="/dev/sda1"
-            ADDITIONAL_DEVICE_PREFIX="/dev/sd"
-            ;;
-        *)
-            ROOT_DEVICE_NAME="/dev/xvda"
-            ADDITIONAL_DEVICE_PREFIX="/dev/xvd"
-            ;;
-    esac
-    echo "Root Device Name: $ROOT_DEVICE_NAME"
-    echo "Additional Device Prefix: $ADDITIONAL_DEVICE_PREFIX"
+    # リージョンとVPCごとに処理を開始
+    if [ -z "${PROCESSED_VPCS[$VPC_NAME]}" ]; then
+        echo "リージョン ${REGION} の VPC ${VPC_NAME} の処理を開始します..."
+        
+        # VPC作成または既存のVPC取得
+        EXISTING_VPC_ID=$(aws ec2 describe-vpcs \
+          --region $REGION \
+          --filters "Name=tag:Name,Values=${VPC_NAME}" \
+          --query 'Vpcs[0].VpcId' \
+          --output text)
 
-    # キーペア確認
-    if ! aws ec2 describe-key-pairs --region "$AWS_REGION" --key-names "$KEYNAME" &> /dev/null; then
-        echo "Error: Key pair $KEYNAME not found in region $AWS_REGION"
+        if [ "$EXISTING_VPC_ID" != "None" ]; then
+            echo "既存のVPCを使用します: ${EXISTING_VPC_ID}"
+            EC2_VPC_ID=$EXISTING_VPC_ID
+            
+            # 既存のIGWを取得
+            IGW_ID=$(aws ec2 describe-internet-gateways \
+              --region $REGION \
+              --filters "Name=attachment.vpc-id,Values=${EC2_VPC_ID}" \
+              --query 'InternetGateways[0].InternetGatewayId' \
+              --output text)
+            echo "既存のインターネットゲートウェイ ID: ${IGW_ID}"
+        else
+            echo "VPCを作成中..."
+            EC2_VPC_ID=$(aws ec2 create-vpc \
+              --region $REGION \
+              --cidr-block ${VPC_CIDR} \
+              --tag-specifications "ResourceType=vpc,Tags=[{Key=Name,Value=${VPC_NAME}},{Key=CostDiv,Value=${COST_TAG}}]" \
+              --query 'Vpc.VpcId' \
+              --output text)
+            echo "VPC ID: ${EC2_VPC_ID}"
+
+            # インターネットゲートウェイ作成とアタッチ
+            echo "インターネットゲートウェイを作成中..."
+            IGW_ID=$(aws ec2 create-internet-gateway \
+              --region $REGION \
+              --tag-specifications "ResourceType=internet-gateway,Tags=[{Key=Name,Value=${VPC_NAME}-igw},{Key=CostDiv,Value=${COST_TAG}}]" \
+              --query 'InternetGateway.InternetGatewayId' \
+              --output text)
+            aws ec2 attach-internet-gateway --region $REGION --internet-gateway-id ${IGW_ID} --vpc-id ${EC2_VPC_ID}
+            echo "インターネットゲートウェイ ID: ${IGW_ID}"
+        fi
+        
+        PROCESSED_VPCS[$VPC_NAME]=1
+    fi
+
+    # サブネット作成
+    echo "サブネット ${NAME} を作成中..."
+    SUBNET_ID=$(aws ec2 create-subnet \
+      --region $REGION \
+      --vpc-id ${EC2_VPC_ID} \
+      --cidr-block ${SUBNET_CIDR} \
+      --availability-zone ${AZ} \
+      --tag-specifications "ResourceType=subnet,Tags=[{Key=Name,Value=${VPC_NAME}-${NAME}},{Key=CostDiv,Value=${COST_TAG}}]" \
+      --query 'Subnet.SubnetId' \
+      --output text 2>/dev/null || echo "")
+    
+    if [ -z "$SUBNET_ID" ]; then
+        echo "サブネットの作成に失敗しました。CIDRブロックや設定を確認してください。"
         continue
     fi
-
-    # サブネットID取得
-    if [[ "$SUBNETNAME" =~ ^subnet- ]]; then
-        SUBNETID="$SUBNETNAME"
-    else
-        SUBNETID=$(aws ec2 describe-subnets --region "$AWS_REGION" --filters "Name=tag:Name,Values=$SUBNETNAME" --query "Subnets[0].SubnetId" --output text)
-        [ -z "$SUBNETID" ] && { echo "Error: Subnet $SUBNETNAME not found in region $AWS_REGION"; continue; }
+    
+    echo "${TYPE} サブネット (${AZ}) ID: ${SUBNET_ID}"
+    
+    # パブリックサブネットの場合、パブリックIP自動割り当てを有効化
+    if [[ "${TYPE}" == public ]]; then
+        aws ec2 modify-subnet-attribute --region $REGION --subnet-id ${SUBNET_ID} --map-public-ip-on-launch
+        if [ -z "${FIRST_PUBLIC_SUBNETS[$VPC_NAME]}" ]; then
+            FIRST_PUBLIC_SUBNETS[$VPC_NAME]=${SUBNET_ID}
+        fi
     fi
-    echo "SUBNET-ID: ${SUBNETID}"
 
-    # VPC ID取得
-    VPC_ID=$(aws ec2 describe-subnets --region "$AWS_REGION" --subnet-ids "$SUBNETID" --query "Subnets[0].VpcId" --output text)
-
-    # セキュリティグループID取得
-    SECURITYGROUPIDS=()
-    if [ -n "$SECURITYGROUPNAMES" ]; then
-        IFS=';' read -r -a SG_NAMES <<< "$SECURITYGROUPNAMES"
-        for SG_NAME in "${SG_NAMES[@]}"; do
-            if [[ "$SG_NAME" =~ ^sg- ]]; then
-                SG_ID="$SG_NAME"
-            else
-                SG_ID=$(aws ec2 describe-security-groups --region "$AWS_REGION" \
-                    --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=$SG_NAME" \
-                    --query "SecurityGroups[0].GroupId" --output text)
-                [ -z "$SG_ID" ] && { echo "Error: Security group $SG_NAME not found in region $AWS_REGION"; continue; }
+    # ルートテーブル作成または取得（必要に応じて）
+    if [ -z "${ROUTE_TABLES[$VPC_NAME,$ROUTE_TABLE_NAME]}" ]; then
+        EXISTING_RT_ID=$(aws ec2 describe-route-tables \
+          --region $REGION \
+          --filters "Name=vpc-id,Values=${EC2_VPC_ID}" "Name=tag:Name,Values=${VPC_NAME}-${ROUTE_TABLE_NAME}" \
+          --query 'RouteTables[0].RouteTableId' \
+          --output text)
+        
+        if [ "$EXISTING_RT_ID" != "None" ]; then
+            echo "既存のルートテーブルを使用します: ${EXISTING_RT_ID}"
+            ROUTE_TABLES[$VPC_NAME,$ROUTE_TABLE_NAME]=$EXISTING_RT_ID
+        else
+            echo "ルートテーブル ${ROUTE_TABLE_NAME} を作成中..."
+            RT_ID=$(aws ec2 create-route-table \
+              --region $REGION \
+              --vpc-id ${EC2_VPC_ID} \
+              --tag-specifications "ResourceType=route-table,Tags=[{Key=Name,Value=${VPC_NAME}-${ROUTE_TABLE_NAME}},{Key=CostDiv,Value=${COST_TAG}}]" \
+              --query 'RouteTable.RouteTableId' \
+              --output text)
+            ROUTE_TABLES[$VPC_NAME,$ROUTE_TABLE_NAME]=$RT_ID
+            echo "ルートテーブル ID: ${RT_ID}"
+            
+            # パブリックルートの場合、インターネットゲートウェイを設定
+            if [[ "${TYPE}" == public ]]; then
+                aws ec2 create-route \
+                  --region $REGION \
+                  --route-table-id $RT_ID \
+                  --destination-cidr-block '0.0.0.0/0' \
+                  --gateway-id $IGW_ID
             fi
-            SECURITYGROUPIDS+=("$SG_ID")
-        done
+        fi
     fi
-    echo "SECURITYGROUP-IDS: ${SECURITYGROUPIDS[*]}"
 
-    # タグ定義
-    TAG_SPEC="ResourceType=instance,Tags=[{Key=Name,Value=$NAME},{Key=CostDiv,Value=$COST_TAG}]"
+    # サブネットとルートテーブルの関連付け
+    aws ec2 associate-route-table \
+      --region $REGION \
+      --subnet-id $SUBNET_ID \
+      --route-table-id ${ROUTE_TABLES[$VPC_NAME,$ROUTE_TABLE_NAME]}
 
-    # インスタンス作成
-    INSTANCE_ID=$(aws ec2 run-instances --region "$AWS_REGION" \
-        --image-id "$IMAGEID" \
-        --instance-type "$INSTANCETYPE" \
-        --key-name "$KEYNAME" \
-        $(if [ ${#SECURITYGROUPIDS[@]} -gt 0 ]; then echo "--security-group-ids ${SECURITYGROUPIDS[*]}"; fi) \
-        --subnet-id "$SUBNETID" \
-        $(if [ -n "$PRIVATEIPADDRESS" ]; then echo "--private-ip-address $PRIVATEIPADDRESS"; fi) \
-        --disable-api-termination \
-        --tag-specifications "$TAG_SPEC" \
-        --block-device-mappings "[{\"DeviceName\":\"$ROOT_DEVICE_NAME\",\"Ebs\":{\"VolumeSize\":$VOLUMESIZE,\"VolumeType\":\"$VOLUMETYPE\",\"Encrypted\":true}}]" \
-        --query 'Instances[0].InstanceId' --output text)
-
-    echo "Instance $NAME created successfully in region $AWS_REGION"
-    echo "Instance ID: $INSTANCE_ID"
-
-    # rootボリュームにタグ付与
-    ROOT_VOLUME_ID=$(aws ec2 describe-instances --region "$AWS_REGION" --instance-ids "$INSTANCE_ID" --query "Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId" --output text)
-    aws ec2 create-tags --region "$AWS_REGION" --resources "$ROOT_VOLUME_ID" --tags "Key=Name,Value=$NAME-root" "Key=CostDiv,Value=$COST_TAG"
-
-    echo "Instance $NAME setup complete in region $AWS_REGION"
-    echo "----------------------------------"
-
+    # NATゲートウェイが必要な場合（`private-nat` タイプ）
+    if [[ "${TYPE}" == private-nat ]]; then
+        NAT_GATEWAY_KEY="${VPC_NAME},${AZ}-natgw"
+        
+        if [ -z "${NAT_GATEWAYS[$NAT_GATEWAY_KEY]}" ]; then
+            EXISTING_NAT_GATEWAY=$(aws ec2 describe-nat-gateways \
+              --region $REGION \
+              --filter "Name=vpc-id,Values=${EC2_VPC_ID}" "Name=subnet-id,Values=${FIRST_PUBLIC_SUBNETS[$VPC_NAME]}" \
+              "Name=state,Values=available" \
+              --query 'NatGateways[?Tags[?Key==`Name` && Value==`'"${VPC_NAME}-${AZ}-natgw"'`]].NatGatewayId' \
+              --output text)
+            
+            if [ -n "$EXISTING_NAT_GATEWAY" ] && [ "$EXISTING_NAT_GATEWAY" != "None" ]; then
+                echo "既存のNATゲートウェイを使用します (${AZ}): $EXISTING_NAT_GATEWAY"
+                NAT_GATEWAYS[$NAT_GATEWAY_KEY]=$EXISTING_NAT_GATEWAY
+            else
+                echo "NATゲートウェイを作成中 (${AZ})..."
+                EIP_ALLOC_ID=$(aws ec2 allocate-address \
+                  --region $REGION \
+                  --tag-specifications "ResourceType=elastic-ip,Tags=[{Key=Name,Value=${VPC_NAME}-${AZ}-natgw-ip},{Key=CostDiv,Value=${COST_TAG}}]" \
+                  --query 'AllocationId' \
+                  --output text)
+                NAT_GATEWAY_ID=$(aws ec2 create-nat-gateway \
+                  --region $REGION \
+                  --subnet-id ${FIRST_PUBLIC_SUBNETS[$VPC_NAME]} \
+                  --allocation-id $EIP_ALLOC_ID \
+                  --tag-specifications "ResourceType=natgateway,Tags=[{Key=Name,Value=${VPC_NAME}-${AZ}-natgw},{Key=CostDiv,Value=${COST_TAG}}]" \
+                  --query 'NatGateway.NatGatewayId' \
+                  --output text)
+                NAT_GATEWAYS[$NAT_GATEWAY_KEY]=$NAT_GATEWAY_ID
+                
+                # NATゲートウェイが利用可能になるまで待機
+                echo "NATゲートウェイ (${AZ}) の準備を待機中..."
+                aws ec2 wait nat-gateway-available --region $REGION --nat-gateway-ids $NAT_GATEWAY_ID
+                
+                # プライベートルートテーブルにNATゲートウェイルートを追加
+                aws ec2 create-route \
+                  --region $REGION \
+                  --route-table-id ${ROUTE_TABLES[$VPC_NAME,$ROUTE_TABLE_NAME]} \
+                  --destination-cidr-block '0.0.0.0/0' \
+                  --nat-gateway-id $NAT_GATEWAY_ID
+                echo "NATゲートウェイルートを追加しました (${AZ})"
+            fi
+        fi
+    fi
 done
 
+echo "全てのリージョンとVPCの処理が完了しました！"

@@ -1,0 +1,7 @@
+REGION,NAME,TYPE,PARAMETER_FAMILY,DESCRIPTION,PARAMS_FILE
+ap-northeast-1,cluster-param,cluster,aurora-mysql8.0,test cluster param,test1_clusterparam.csv
+ap-northeast-1,instance-param,instance,aurora-mysql8.0,test instance param,test1_instanceparam.csv
+us-east-1,cluster-us-param,cluster,aurora-mysql8.0,test cluster param,
+us-east-1,instance-us-param,instance,aurora-mysql8.0,test instance param,
+ap-northeast-1,cluster-ap-param,cluster,aurora-mysql8.0,test cluster param,
+ap-northeast-1,instance-ap-param,instance,aurora-mysql8.0,test instance param,test1_instanceparam.csv

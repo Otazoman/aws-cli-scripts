@@ -1,0 +1,7 @@
+PARAM_NAME,VALUE,APPLY
+aws_default_s3_role,arn:aws:iam::734027076290:role/rds-s3-lmsprddb-aurora-mysql-role,pending-reboot
+character_set_server,utf8mb4,pending-reboot
+collation_server,utf8mb4_general_ci,pending-reboot
+server_audit_excl_users,rdsadmin,immediate
+skip-character-set-client-handshake,1,pending-reboot
+time_zone,Asia/Tokyo,immediate

@@ -1,6 +1,0 @@
-region,VPC_name,group_name,description,action,direction,protocol,from_port,to_port,source,rule_description
-ap-northeast-1,handson-cli-vpc,my-sg-1,My first security group1,add,ingress,tcp,22,22,192.168.0.0/24,
-ap-northeast-1,handson-cli-vpc,my-sg-2,My first security group2,add,ingress,tcp,444,444,sg-05a58c9db742746a0,added
-ap-northeast-1,handson-cli-vpc,my-sg-3,My third security group3,add,ingress,tcp,53,53,pl-0e21a0e22e1a5d949,added
-us-east-1,test1vpc,test-sg,Existing security group,add,egress,-1,,,172.20.2.0/24,added
-us-east-1,test1vpc,test-sg,Existing security group,add,ingress,icmp,-1,-1,0.0.0.0/0,

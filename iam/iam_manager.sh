@@ -108,7 +108,7 @@ echo "使用するCSVファイル: $CSV_FILE"
 
                 # ポリシーアタッチ
                 if [ -n "$ATTACH_TO" ]; then
-                    if [ "$IS_ADD_ATTACH" == "true" ]; then
+                    if [ "$IS_ADD_ATTACH" == "TRUE" ]; then
                         echo "追加でポリシー $ATTACH_TO をロール $RESOURCE_NAME にアタッチします"
                     else
                         # 既存のポリシーをデタッチ (フルアタッチの場合)
@@ -167,7 +167,7 @@ echo "使用するCSVファイル: $CSV_FILE"
 
                 # ポリシーアタッチ
                 if [ -n "$ATTACH_TO" ]; then
-                    if [ "$IS_ADD_ATTACH" == "true" ]; then
+                    if [ "$IS_ADD_ATTACH" == "TRUE" ]; then
                         echo "追加でポリシー $ATTACH_TO をユーザー $RESOURCE_NAME にアタッチします"
                     else
                         # 既存のポリシーをデタッチ (フルアタッチの場合)

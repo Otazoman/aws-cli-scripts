@@ -1,7 +1,7 @@
 REGION,VPC_NAME,VPC_CIDR,SUBNET_CIDR,AZ,TYPE,NAME,ROUTE_TABLE_NAME,COST_TAG
 ap-northeast-1,handson-cli-vpc,10.0.0.0/16,10.0.1.0/24,ap-northeast-1a,public,public-subnet-a1,public-rt,handson
 ap-northeast-1,handson-cli-vpc,10.0.0.0/16,10.0.2.0/24,ap-northeast-1c,public,public-subnet-c1,public-rt,handson
-ap-northeast-1,handson-cli-vpc,10.0.0.0/16,10.0.11.0/24,ap-northeast-1a,private-no-nat,private-subnet-a1,private-rt-a,handson
+ap-northeast-1,handson-cli-vpc,10.0.0.0/16,10.0.11.0/24,ap-northeast-1a,private-nat,private-subnet-a1,private-rt-a,handson
 ap-northeast-1,handson-cli-vpc,10.0.0.0/16,10.0.12.0/24,ap-northeast-1c,private-no-nat,private-subnet-c1,private-rt-a,handson
 ap-northeast-1,test-test-vpc,172.20.0.0/16,172.20.1.0/24,ap-northeast-1a,public,test-public-subnet-a1,test-public-rt,test-test
 ap-northeast-1,test-test-vpc,172.20.0.0/16,172.20.2.0/24,ap-northeast-1a,private-no-nat,test-public-subnet-a1,test-private-rt,test-test

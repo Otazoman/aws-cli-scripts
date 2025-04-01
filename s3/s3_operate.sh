@@ -1,6 +1,16 @@
 #!/bin/bash
 
-CSV_FILE="buckets.csv"
+# CSVファイルの指定を必須化
+if [ -z "$1" ]; then
+    echo "エラー: CSVファイルを指定してください"
+    exit 1
+fi
+CSV_FILE="$1"
+
+if [ ! -f "$CSV_FILE" ]; then
+    echo "エラー: 指定されたCSVファイルが存在しません: $CSV_FILE"
+    exit 1
+fi
 
 tail -n +2 "$CSV_FILE" | while IFS=, read -r Action BucketName Region VersioningEnabled PublicAccessBlock IntelligentTiering LifecycleConfigFile PolicyFile Tags RemoveObjects
 do
@@ -26,12 +36,13 @@ do
                 echo "バケットは既に存在するため作成をスキップします"
             fi
 
-            # 以降の設定処理は同じ...
-            # パブリックアクセスブロック設定
-            echo "パブリックアクセスブロック設定中..."
-            aws s3api put-public-access-block \
-                --bucket "$BucketName" \
-                --public-access-block-configuration "BlockPublicAcls=$PublicAccessBlock,IgnorePublicAcls=$PublicAccessBlock,BlockPublicPolicy=$PublicAccessBlock,RestrictPublicBuckets=$PublicAccessBlock"
+            # パブリックアクセスブロック設定 (空欄やnullなら適用しない)
+            if [ -n "$PublicAccessBlock" ] && [ "$PublicAccessBlock" != "null" ]; then
+                echo "パブリックアクセスブロック設定中..."
+                aws s3api put-public-access-block \
+                    --bucket "$BucketName" \
+                    --public-access-block-configuration "BlockPublicAcls=$PublicAccessBlock,IgnorePublicAcls=$PublicAccessBlock,BlockPublicPolicy=$PublicAccessBlock,RestrictPublicBuckets=$PublicAccessBlock"
+            fi
 
             # バージョニング設定
             if [ "$VersioningEnabled" = "true" ]; then
@@ -51,10 +62,7 @@ do
                         "Id": "archive-config",
                         "Status": "Enabled",
                         "Tierings": [
-                            {
-                                "Days": 90,
-                                "AccessTier": "ARCHIVE_ACCESS"
-                            }
+                            {"Days": 90, "AccessTier": "ARCHIVE_ACCESS"}
                         ]
                     }' > /dev/null
             fi
@@ -79,7 +87,7 @@ do
             if [ -n "$Tags" ] && [ "$Tags" != "null" ]; then
                 echo "タグを設定中..."
                 TAG_JSON="{\"TagSet\": ["
-                IFS=',' read -ra TAG_PAIRS <<< "$Tags"
+                IFS=';' read -ra TAG_PAIRS <<< "$Tags"
                 for pair in "${TAG_PAIRS[@]}"; do
                     IFS='=' read -r key value <<< "$pair"
                     key=$(echo "$key" | tr -d '"' | xargs)
@@ -122,3 +130,4 @@ do
 done
 
 echo "全ての処理が完了しました"
+

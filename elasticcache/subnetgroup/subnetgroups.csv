@@ -1,0 +1,4 @@
+REGION,NAME,SUBNETS,DESCRIPTION
+ap-northeast-1,test-db-subnet,rds-test-subnet-subnet-private1-ap-northeast-1a;rds-test-subnet-subnet-private2-ap-northeast-1c;rds-test-subnet-subnet-private3-ap-northeast-1d,sample rds description
+ap-northeast-1,test-db-subnet2,subnet-087e6fdd3ab353889;subnet-0ca31600f9ed14f0a;subnet-025d161b936498936,sample rds description2
+us-east-1,test-db-subnet1,test-subnet-subnet-private1-us-east-1a;subnet-07d93cc838f9a4fa8;test-subnet-subnet-private3-us-east-1c,sample rds description2

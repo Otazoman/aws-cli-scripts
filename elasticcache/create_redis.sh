@@ -68,9 +68,17 @@ parse_tags() {
     echo "${tags_json%,}]"
 }
 
+check_snapshot_exists() {
+    local region=$1 snapshot_name=$2
+    aws elasticache describe-snapshots \
+        --region "$region" \
+        --snapshot-name "$snapshot_name" &>/dev/null
+    return $?
+}
+
 process_csv() {
     local header=$(head -1 "$1")
-    local expected="REGION,CLUSTERID,ENGINE,NODETYPE,NUMCACHENODES,PARAMETERGROUPNAME,ENGINEVERSION,CACHESUBNETGROUPNAME,SECURITYGROUPIDENTIFIERS,AT_REST_ENCRYPTION,CLUSTER_MODE,NUM_SHARDS,IN_TRANSIT_ENCRYPTION,MAINTENANCE_WINDOW,AUTO_UPGRADE,SNAPSHOT_ENABLED,SNAPSHOT_WINDOW,SNAPSHOT_RETENTION,AUTOMATIC_FAILOVER,TAGS"
+    local expected="REGION,CLUSTERID,ENGINE,NODETYPE,NUMCACHENODES,PARAMETERGROUPNAME,ENGINEVERSION,CACHESUBNETGROUPNAME,SECURITYGROUPIDENTIFIERS,AT_REST_ENCRYPTION,CLUSTER_MODE,NUM_SHARDS,IN_TRANSIT_ENCRYPTION,MAINTENANCE_WINDOW,AUTO_UPGRADE,SNAPSHOT_ENABLED,SNAPSHOT_WINDOW,SNAPSHOT_RETENTION,AUTOMATIC_FAILOVER,TAGS,SNAPSHOT_NAME,RESTORE_MODE"
 
     echo "=== CSVヘッダー検証 ==="
     echo "期待するヘッダー: $expected"
@@ -81,7 +89,7 @@ process_csv() {
         return 1
     }
 
-    echo "=== クラスター作成開始 ==="
+    echo "=== クラスター作成/復元開始 ==="
     local line_num=1
     while IFS=, read -r line || [ -n "$line" ]; do
         line_num=$((line_num+1))
@@ -90,16 +98,35 @@ process_csv() {
         echo "--- 行 $line_num 処理中 ---"
         echo "生データ: $line"
 
-        IFS=, read -r region clusterid engine nodetype numnodes pgname enginever subnetgrp sgs at_rest_encryption cluster_mode num_shards transit_encryption maintenance_window auto_upgrade snapshot_enabled snapshot_window snapshot_retention automatic_failover tags <<< "$line"
+        IFS=, read -r region clusterid engine nodetype numnodes pgname enginever subnetgrp sgs at_rest_encryption cluster_mode num_shards transit_encryption maintenance_window auto_upgrade snapshot_enabled snapshot_window snapshot_retention automatic_failover tags snapshot_name restore_mode <<< "$line"
 
         region=$(echo "$region" | tr -d '\r')
         clusterid=$(echo "$clusterid" | tr -d '\r')
         subnetgrp=$(echo "$subnetgrp" | tr -d '\r')
+        snapshot_name=$(echo "$snapshot_name" | tr -d '\r')
+        restore_mode=$(echo "$restore_mode" | tr -d '\r')
 
         echo "リージョン: $region"
         echo "クラスターID: $clusterid"
+        echo "復元モード: $restore_mode"
+        echo "スナップショット名: $snapshot_name"
 
-        validate_input "$nodetype" "$enginever" "$at_rest_encryption" "$transit_encryption" "$cluster_mode" "$automatic_failover" "$numnodes" || continue
+        # 復元モードの場合はスナップショットの存在確認
+        if [ "$restore_mode" == "enabled" ]; then
+            if [ -z "$snapshot_name" ]; then
+                echo "エラー: 復元モードですがスナップショット名が指定されていません"
+                continue
+            fi
+            
+            if ! check_snapshot_exists "$region" "$snapshot_name"; then
+                echo "エラー: スナップショット '$snapshot_name' がリージョン $region に存在しません"
+                continue
+            fi
+            echo "スナップショット確認済み: $snapshot_name"
+        else
+            # 新規作成モードの場合は通常のバリデーション
+            validate_input "$nodetype" "$enginever" "$at_rest_encryption" "$transit_encryption" "$cluster_mode" "$automatic_failover" "$numnodes" || continue
+        fi
 
         check_subnet_group "$region" "$subnetgrp" || continue
 
@@ -124,44 +151,81 @@ process_csv() {
             echo "タグ内容: $tags_json"
         fi
 
-        if [[ "$cluster_mode" == "enabled" ]]; then
-            echo "レプリケーショングループで作成"
+        if [ "$restore_mode" == "enabled" ]; then
+            echo "=== スナップショットから復元 ==="
+            
+            if [[ "$cluster_mode" == "enabled" ]]; then
+                echo "レプリケーショングループとして復元"
+                cmd="aws elasticache create-replication-group \
+                    --no-cli-pager \
+                    --region \"$region\" \
+                    --replication-group-id \"$clusterid\" \
+                    --replication-group-description \"$clusterid cluster\" \
+                    --cache-node-type \"$nodetype\" \
+                    --cache-parameter-group-name \"$pgname\" \
+                    --cache-subnet-group-name \"$subnetgrp\" \
+                    --security-group-ids \"$(IFS=,; echo "${sg_ids[*]}")\" \
+                    --snapshot-name \"$snapshot_name\""
 
-            local replicas_per_group=1
-            local num_node_groups="$num_shards"
+                [ "$automatic_failover" == "enabled" ] && cmd+=" --automatic-failover-enabled"
+                [ "$at_rest_encryption" == "enabled" ] && cmd+=" --at-rest-encryption-enabled"
+                [ "$transit_encryption" == "enabled" ] && cmd+=" --transit-encryption-enabled"
+            else
+                echo "シングルノードクラスターとして復元"
+                cmd="aws elasticache create-cache-cluster \
+                    --no-cli-pager \
+                    --region \"$region\" \
+                    --cache-cluster-id \"$clusterid\" \
+                    --cache-node-type \"$nodetype\" \
+                    --num-cache-nodes $numnodes \
+                    --cache-parameter-group-name \"$pgname\" \
+                    --cache-subnet-group-name \"$subnetgrp\" \
+                    --security-group-ids \"$(IFS=,; echo "${sg_ids[*]}")\" \
+                    --snapshot-name \"$snapshot_name\""
 
-            cmd="aws elasticache create-replication-group \
-                --no-cli-pager \
-                --region \"$region\" \
-                --replication-group-id \"$clusterid\" \
-                --replication-group-description \"$clusterid cluster\" \
-                --engine \"$engine\" \
-                --cache-node-type \"$nodetype\" \
-                --num-node-groups $num_node_groups \
-                --replicas-per-node-group $replicas_per_group \
-                --cache-parameter-group-name \"$pgname\" \
-                --engine-version \"$enginever\" \
-                --cache-subnet-group-name \"$subnetgrp\" \
-                --security-group-ids \"$(IFS=,; echo "${sg_ids[*]}")\""
-
-            [ "$automatic_failover" == "enabled" ] && cmd+=" --automatic-failover-enabled"
-            [ "$at_rest_encryption" == "enabled" ] && cmd+=" --at-rest-encryption-enabled"
-            [ "$transit_encryption" == "enabled" ] && cmd+=" --transit-encryption-enabled"
+                [ "$transit_encryption" == "enabled" ] && cmd+=" --transit-encryption-enabled"
+            fi
         else
-            echo "シングルノードモードで作成"
-            cmd="aws elasticache create-cache-cluster \
-                --no-cli-pager \
-                --region \"$region\" \
-                --cache-cluster-id \"$clusterid\" \
-                --engine \"$engine\" \
-                --cache-node-type \"$nodetype\" \
-                --num-cache-nodes $numnodes \
-                --cache-parameter-group-name \"$pgname\" \
-                --engine-version \"$enginever\" \
-                --cache-subnet-group-name \"$subnetgrp\" \
-                --security-group-ids \"$(IFS=,; echo "${sg_ids[*]}")\""
+            echo "=== 新規クラスター作成 ==="
+            
+            if [[ "$cluster_mode" == "enabled" ]]; then
+                echo "レプリケーショングループで作成"
+                local replicas_per_group=1
+                local num_node_groups="$num_shards"
 
-            [ "$transit_encryption" == "enabled" ] && cmd+=" --transit-encryption-enabled"
+                cmd="aws elasticache create-replication-group \
+                    --no-cli-pager \
+                    --region \"$region\" \
+                    --replication-group-id \"$clusterid\" \
+                    --replication-group-description \"$clusterid cluster\" \
+                    --engine \"$engine\" \
+                    --cache-node-type \"$nodetype\" \
+                    --num-node-groups $num_node_groups \
+                    --replicas-per-node-group $replicas_per_group \
+                    --cache-parameter-group-name \"$pgname\" \
+                    --engine-version \"$enginever\" \
+                    --cache-subnet-group-name \"$subnetgrp\" \
+                    --security-group-ids \"$(IFS=,; echo "${sg_ids[*]}")\""
+
+                [ "$automatic_failover" == "enabled" ] && cmd+=" --automatic-failover-enabled"
+                [ "$at_rest_encryption" == "enabled" ] && cmd+=" --at-rest-encryption-enabled"
+                [ "$transit_encryption" == "enabled" ] && cmd+=" --transit-encryption-enabled"
+            else
+                echo "シングルノードモードで作成"
+                cmd="aws elasticache create-cache-cluster \
+                    --no-cli-pager \
+                    --region \"$region\" \
+                    --cache-cluster-id \"$clusterid\" \
+                    --engine \"$engine\" \
+                    --cache-node-type \"$nodetype\" \
+                    --num-cache-nodes $numnodes \
+                    --cache-parameter-group-name \"$pgname\" \
+                    --engine-version \"$enginever\" \
+                    --cache-subnet-group-name \"$subnetgrp\" \
+                    --security-group-ids \"$(IFS=,; echo "${sg_ids[*]}")\""
+
+                [ "$transit_encryption" == "enabled" ] && cmd+=" --transit-encryption-enabled"
+            fi
         fi
 
         [ "$snapshot_enabled" == "enabled" ] && cmd+=" --snapshot-retention-limit $snapshot_retention --preferred-maintenance-window \"$maintenance_window\""

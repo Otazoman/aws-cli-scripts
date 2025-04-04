@@ -1,3 +1,4 @@
-Action,BucketName,Region,VersioningEnabled,PublicAccessBlock,IntelligentTiering,LifecycleConfigFile,PolicyFile,Tags,RemoveObjects
-add,ujimasa20250328-ap,ap-northeast-1,true,false,true,lifecycle1.json,policy1.json,Environment=Production;Project=WebApp,false
-add,ujimasa20250328-us,us-west-2,false,,false,,,Environment=Development;Project=Test,true
+ACTION,BUCKETNAME,REGION,VERSIONINGENABLED,PUBLICACCESSBLOCK,INTELLIGENTTIERING,LIFECYCLECONFIGFILE,POLICYFILE,TAGS,REMOVEOBJECTS
+add,ujimasa20250328-ap,ap-northeast-1,TRUE,FALSE,intelligent-tiering.json,lifecycle1.json,policy1.json,Environment=Production;Project=WebApp,FALSE
+add,ujimasa20250328-us,us-east-1,FALSE,,FALSE,,,Environment=Development;Project=Test,TRUE
+add,ujimasa20250404-ap,ap-northeast-1,TRUE,FALSE,intelligent-tiering.json,lifecycle1.json,policy1.json,Environment=Production;Project=WebApp,FALSE

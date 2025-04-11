@@ -15,18 +15,29 @@ if [[ ! -f "$RULES_FILE" ]]; then
   exit 1
 fi
 
-# VPC名とリージョンからVPC IDを取得する関数
+# VPC識別子（IDまたは名前）からVPC IDを取得する関数
 get_vpc_id() {
   local REGION=$1
-  local VPC_NAME=$2
-  local VPC_ID=$(aws ec2 describe-vpcs \
-    --region ${REGION} \
-    --filters "Name=tag:Name,Values=${VPC_NAME}" \
-    --query "Vpcs[0].VpcId" \
-    --output text
-  )
-  if [[ $VPC_ID == "None" ]]; then
-    echo "エラー: VPC名 '${VPC_NAME}' はリージョン '${REGION}' に存在しません。" >&2
+  local VPC_IDENTIFIER=$2
+  # VPC IDの形式かどうかをチェック (^vpc-)
+  if [[ $VPC_IDENTIFIER =~ ^vpc- ]]; then
+    # VPC IDが存在するか確認
+    local VPC_ID=$(aws ec2 describe-vpcs \
+      --region ${REGION} \
+      --vpc-ids ${VPC_IDENTIFIER} \
+      --query "Vpcs[0].VpcId" \
+      --output text 2>/dev/null)
+  else
+    # VPC名で検索
+    local VPC_ID=$(aws ec2 describe-vpcs \
+      --region ${REGION} \
+      --filters "Name=tag:Name,Values=${VPC_IDENTIFIER}" \
+      --query "Vpcs[0].VpcId" \
+      --output text)
+  fi
+
+  if [[ $VPC_ID == "None" || -z $VPC_ID ]]; then
+    echo "エラー: VPC '${VPC_IDENTIFIER}' はリージョン '${REGION}' に存在しません。" >&2
     exit 1
   fi
   echo $VPC_ID
@@ -53,9 +64,10 @@ get_prefix_list_id() {
 get_security_group_id() {
   local REGION=$1
   local SG_NAME=$2
+  local VPC_ID=$3
   local SG_ID=$(aws ec2 describe-security-groups \
     --region ${REGION} \
-    --filters "Name=group-name,Values=${SG_NAME}" \
+    --filters "Name=group-name,Values=${SG_NAME}" "Name=vpc-id,Values=${VPC_ID}" \
     --query "SecurityGroups[0].GroupId" \
     --output text)
   if [[ $SG_ID == "None" ]]; then
@@ -101,12 +113,11 @@ rule_exists() {
 
 # 作業対象のセキュリティグループの名前とIDをマッピング
 # 存在しない場合は新規で作成
-# 対象は引数にしたファイル内のリージョン、VPC ID、名前、説明が一意のものを抽出
 declare -A sg_map
-while IFS=, read -r REGION VPC_NAME NAME DESCRIPTION
+while IFS=, read -r REGION VPC_IDENTIFIER NAME DESCRIPTION
 do
-  VPCID=$(get_vpc_id ${REGION} ${VPC_NAME})
-  if [ -z ${sg_map[${REGION}${VPCID}${NAME}]} ]; then
+  VPCID=$(get_vpc_id ${REGION} ${VPC_IDENTIFIER})
+  if [ -z "${sg_map[${REGION}${VPCID}${NAME}]}" ]; then
     sg_id=$(aws ec2 describe-security-groups \
       --region ${REGION} \
       --filters "Name=vpc-id,Values=${VPCID}" "Name=group-name,Values=${NAME}" \
@@ -133,10 +144,14 @@ $(awk 'BEGIN{FS=","; OFS=","} NR>1 {print $1,$2,$3,$4}' ${RULES_FILE} | sort | u
 EOS
 
 # 引数にしたファイルを読み込みセキュリティグループのルールを修正
-# ファイルの１行目はヘッダーとして無視する
-while IFS=, read -r REGION VPC_NAME NAME DESCRIPTION ACTION DIRECTION PROTOCOL FROM_PORT TO_PORT TARGET RULE_DESCRIPTION
+while IFS=, read -r REGION VPC_IDENTIFIER NAME DESCRIPTION ACTION DIRECTION PROTOCOL FROM_PORT TO_PORT TARGET RULE_DESCRIPTION
 do
-  VPCID=$(get_vpc_id ${REGION} ${VPC_NAME})
+  # ヘッダ行をスキップ
+  if [[ "$REGION" == "REGION" ]]; then
+    continue
+  fi
+
+  VPCID=$(get_vpc_id ${REGION} ${VPC_IDENTIFIER})
   if [ "${ACTION}" == "add" ]; then
     ACT="authorize"
     if [ -z "$RULE_DESCRIPTION" ]; then
@@ -158,7 +173,7 @@ do
     TARGET_TYPE="PrefixListId"
   else
     # セキュリティグループ名の場合
-    SG_ID=$(get_security_group_id ${REGION} ${TARGET})
+    SG_ID=$(get_security_group_id ${REGION} ${TARGET} ${VPCID})
     if [[ -n $SG_ID ]]; then
       TARGET=$SG_ID
       TARGET_TYPE="GroupId"
@@ -210,4 +225,3 @@ do
 done << EOS
 $(awk 'BEGIN{FS=","; OFS=","} NR>1 {print $0}' ${RULES_FILE})
 EOS
-

@@ -95,11 +95,19 @@ set_bucket_policy() {
     local BUCKET_NAME=$1
     local REGION=$2
     local LB_TYPE=$3  # "ALB" or "NLB"
+    local LB_ARN=$4   # ロードバランサーARN
+    local S3_PREFIX=$5
     
     echo "  S3バケットポリシーを設定しています..."
     
-    # リージョンごとのELBアカウントIDを取得
-    # 主要リージョンのELBアカウントID（必要に応じて追加）
+    # アカウントIDを取得
+    local ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    if [ -z "$ACCOUNT_ID" ]; then
+        echo "  エラー: AWSアカウントIDの取得に失敗しました"
+        return 1
+    fi
+    
+    # リージョンごとのELB/NLBアカウントIDを取得
     declare -A ELB_ACCOUNTS=(
         ["us-east-1"]="127311923021"
         ["us-east-2"]="033677994240"
@@ -124,7 +132,58 @@ set_bucket_policy() {
         return 1
     fi
     
-    local POLICY=$(cat <<EOF
+    # プレフィックスを正規化
+    S3_PREFIX=$(echo "$S3_PREFIX" | sed 's:^/*::;s:/*$::')  # 前後のスラッシュを除去
+    
+    # NLB用のポリシー
+    if [ "$LB_TYPE" == "NLB" ]; then
+        local RESOURCE_PATH="${S3_PREFIX}/AWSLogs/${ACCOUNT_ID}/*"
+        local LOGS_ARN="arn:aws:logs:${REGION}:${ACCOUNT_ID}:*"
+        
+        local POLICY=$(cat <<EOF
+{
+    "Version": "2012-10-17",
+    "Id": "AWSConsole-AccessLogs-Policy",
+    "Statement": [
+        {
+            "Sid": "AWSConsoleStmt",
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::${ELB_ACCOUNT_ID}:root"
+            },
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::${BUCKET_NAME}/${RESOURCE_PATH}"
+        },
+        {
+            "Sid": "AWSLogDeliveryWrite",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "delivery.logs.amazonaws.com"
+            },
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::${BUCKET_NAME}/${RESOURCE_PATH}",
+            "Condition": {
+                "StringEquals": {
+                    "s3:x-amz-acl": "bucket-owner-full-control"
+                }
+            }
+        },
+        {
+            "Sid": "AWSLogDeliveryAclCheck",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "delivery.logs.amazonaws.com"
+            },
+            "Action": "s3:GetBucketAcl",
+            "Resource": "arn:aws:s3:::${BUCKET_NAME}"
+        }
+    ]
+}
+EOF
+        )
+    else
+        # ALB用のポリシー
+        local POLICY=$(cat <<EOF
 {
     "Version": "2012-10-17",
     "Statement": [
@@ -134,7 +193,12 @@ set_bucket_policy() {
                 "AWS": "arn:aws:iam::${ELB_ACCOUNT_ID}:root"
             },
             "Action": "s3:PutObject",
-            "Resource": "arn:aws:s3:::${BUCKET_NAME}/*"
+            "Resource": "arn:aws:s3:::${BUCKET_NAME}/*",
+            "Condition": {
+                "StringEquals": {
+                    "s3:x-amz-acl": "bucket-owner-full-control"
+                }
+            }
         },
         {
             "Effect": "Allow",
@@ -147,14 +211,22 @@ set_bucket_policy() {
     ]
 }
 EOF
-    )
+        )
+    fi
+    
+    # ポリシーを一時ファイルに保存
+    local POLICY_FILE=$(mktemp)
+    echo "$POLICY" > "$POLICY_FILE"
     
     aws s3api put-bucket-policy \
         --bucket "$BUCKET_NAME" \
-        --policy "$POLICY" \
+        --policy "file://${POLICY_FILE}" \
         --region "$REGION"
     
-    if [ $? -eq 0 ]; then
+    local RESULT=$?
+    rm -f "$POLICY_FILE"
+    
+    if [ $RESULT -eq 0 ]; then
         echo "  S3バケットポリシーの設定に成功しました"
         return 0
     else
@@ -295,6 +367,9 @@ get_load_balancer_arn() {
 ensure_s3_bucket() {
     local REGION=$1
     local BUCKET_NAME=$2
+    local LB_TYPE=$3  # "ALB" or "NLB"
+    local LB_ARN=$4   # ロードバランサーARN
+    local S3_PREFIX=$5
     
     echo "  S3バケット '$BUCKET_NAME' の存在を確認..."
     
@@ -303,7 +378,9 @@ ensure_s3_bucket() {
     
     if [ $? -eq 0 ]; then
         echo "  S3バケット '$BUCKET_NAME' は既に存在します"
-        return 0
+        # 既存バケットにもポリシーを設定
+        set_bucket_policy "$BUCKET_NAME" "$REGION" "$LB_TYPE" "$LB_ARN" "$S3_PREFIX"
+        return $?
     else
         echo "  S3バケット '$BUCKET_NAME' が存在しないため、作成します"
         create_s3_bucket "$REGION" "$BUCKET_NAME"
@@ -313,7 +390,7 @@ ensure_s3_bucket() {
         fi
         
         # バケットポリシーを設定
-        set_bucket_policy "$BUCKET_NAME" "$REGION"
+        set_bucket_policy "$BUCKET_NAME" "$REGION" "$LB_TYPE" "$LB_ARN" "$S3_PREFIX"
         return $?
     fi
 }
@@ -326,118 +403,86 @@ configure_load_balancer_logs() {
     local LB_TYPE=$3
     local ENABLE_ACCESS_LOGS=$4
     local S3_BUCKET_NAME=$5
-    local S3_PREFIX=$6
+    local S3_PREFIX_RAW=$6 # 元のプレフィックスを保持
     local ENABLE_CONNECTION_LOGS=$7
-    
-    # プレフィックスを正規化
-    S3_PREFIX=$(echo "$S3_PREFIX" | xargs)
-    
+    local S3_PREFIX=$(echo "$S3_PREFIX_RAW" | xargs | sed 's:^/*::;s:/*$::') # 前後のスラッシュを削除
+
     # アクセスログ設定 (ALB/NLB共通)
     if [ "$ENABLE_ACCESS_LOGS" == "true" ]; then
         if [ -z "$S3_BUCKET_NAME" ]; then
-            echo "  エラー: アクセスログを有効にするにはS3バケット名を指定する必要があります"
+            echo "  エラー: アクセスログを有効にするにはS3バケット名を指定する必要があります"
             return 1
         fi
-        
-        # S3バケット名の検証
-        if ! [[ "$S3_BUCKET_NAME" =~ ^[a-z0-9.-]{3,63}$ ]]; then
-            echo "  エラー: 無効なS3バケット名です: $S3_BUCKET_NAME"
-            return 1
-        fi
-        
+
         # S3バケットの確認と作成
-        ensure_s3_bucket "$REGION" "$S3_BUCKET_NAME"
+        ensure_s3_bucket "$REGION" "$S3_BUCKET_NAME" "$LB_TYPE" "$LB_ARN" "$S3_PREFIX"
         if [ $? -ne 0 ]; then
-            echo "  エラー: S3バケットの準備に失敗しました"
+            echo "  エラー: S3バケットの準備に失敗しました"
             return 1
         fi
-        
-        echo "  アクセスログを設定しています..."
-        echo "  バケット: $S3_BUCKET_NAME"
-        echo "  プレフィックス: $S3_PREFIX"
-        
-        # まずバケット名を設定
-        aws elbv2 modify-load-balancer-attributes \
-            --load-balancer-arn "$LB_ARN" \
-            --region "$REGION" \
-            --attributes "Key=access_logs.s3.bucket,Value=$S3_BUCKET_NAME"
-        
-        if [ $? -ne 0 ]; then
-            echo "  エラー: バケット名の設定に失敗しました"
-            return 1
-        fi
-        
-        # 次にプレフィックスを設定（指定されている場合）
+
+        echo "  アクセスログを設定しています..."
+        echo "  バケット: $S3_BUCKET_NAME"
+        echo "  プレフィックス: $S3_PREFIX"
+
+        local ATTRIBUTES=("Key=access_logs.s3.enabled,Value=true" "Key=access_logs.s3.bucket,Value=$S3_BUCKET_NAME")
         if [ -n "$S3_PREFIX" ]; then
-            aws elbv2 modify-load-balancer-attributes \
-                --load-balancer-arn "$LB_ARN" \
-                --region "$REGION" \
-                --attributes "Key=access_logs.s3.prefix,Value=$S3_PREFIX"
-            
-            if [ $? -ne 0 ]; then
-                echo "  警告: プレフィックスの設定に失敗しましたが、処理を続行します"
-            fi
+            ATTRIBUTES+=("Key=access_logs.s3.prefix,Value=$S3_PREFIX")
         fi
-        
-        # 最後にログを有効化
+
         aws elbv2 modify-load-balancer-attributes \
             --load-balancer-arn "$LB_ARN" \
             --region "$REGION" \
-            --attributes "Key=access_logs.s3.enabled,Value=true"
-        
+            --attributes "${ATTRIBUTES[@]}"
+
         if [ $? -eq 0 ]; then
-            echo "  アクセスログ設定が成功しました"
+            echo "  アクセスログ設定が成功しました"
         else
-            echo "  エラー: アクセスログの有効化に失敗しました"
+            echo "  エラー: アクセスログ設定に失敗しました"
             return 1
         fi
     else
-        echo "  アクセスログは無効化されています (ENABLE_ACCESS_LOGS: $ENABLE_ACCESS_LOGS)"
+        echo "  アクセスログは無効化されています (ENABLE_ACCESS_LOGS: $ENABLE_ACCESS_LOGS)"
     fi
-    
+
     # 接続ログ設定 (NLBのみ)
     if [ "$LB_TYPE" == "NLB" ] && [ "$ENABLE_CONNECTION_LOGS" == "true" ]; then
         if [ -z "$S3_BUCKET_NAME" ]; then
-            echo "  エラー: 接続ログを有効にするにはS3バケット名を指定する必要があります"
+            echo "  エラー: 接続ログを有効にするにはS3バケット名を指定する必要があります"
             return 1
         fi
-        
+
         # S3バケットの確認と作成
-        ensure_s3_bucket "$REGION" "$S3_BUCKET_NAME"
+        ensure_s3_bucket "$REGION" "$S3_BUCKET_NAME" "$LB_TYPE" "$LB_ARN" "$S3_PREFIX"
         if [ $? -ne 0 ]; then
-            echo "  エラー: S3バケットの準備に失敗しました"
+            echo "  エラー: S3バケットの準備に失敗しました"
             return 1
         fi
-        
-        echo "  NLB接続ログを設定しています..."
-        echo "  バケット: $S3_BUCKET_NAME"
-        echo "  プレフィックス: $S3_PREFIX"
-        
-        # 接続ログ設定を一度に行う
-        local CONNECTION_ATTRS=(
-            "Key=connection_logs.s3.enabled,Value=true"
-            "Key=connection_logs.s3.bucket,Value=$S3_BUCKET_NAME"
-        )
-        
+
+        echo "  NLB接続ログを設定しています..."
+        echo "  バケット: $S3_BUCKET_NAME"
+        echo "  プレフィックス: $S3_PREFIX"
+
+        local ATTRIBUTES=("Key=connection_logs.s3.enabled,Value=true" "Key=connection_logs.s3.bucket,Value=$S3_BUCKET_NAME")
         if [ -n "$S3_PREFIX" ]; then
-            CONNECTION_ATTRS+=("Key=connection_logs.s3.prefix,Value=$S3_PREFIX")
+            ATTRIBUTES+=("Key=connection_logs.s3.prefix,Value=$S3_PREFIX")
         fi
-        
+
         aws elbv2 modify-load-balancer-attributes \
             --load-balancer-arn "$LB_ARN" \
             --region "$REGION" \
-            --attributes "${CONNECTION_ATTRS[@]}"
-        
+            --attributes "${ATTRIBUTES[@]}"
+
         if [ $? -eq 0 ]; then
-            echo "  NLB接続ログ設定が成功しました"
+            echo "  NLB接続ログ設定が成功しました"
         else
-            echo "  エラー: NLB接続ログ設定に失敗しました"
+            echo "  エラー: NLB接続ログ設定に失敗しました"
             return 1
         fi
     elif [ "$LB_TYPE" == "NLB" ]; then
-        echo "  NLB接続ログは無効化されています (ENABLE_CONNECTION_LOGS: $ENABLE_CONNECTION_LOGS)"
+        echo "  NLB接続ログは無効化されています (ENABLE_CONNECTION_LOGS: $ENABLE_CONNECTION_LOGS)"
     fi
-    
+
     return 0
 }
 
@@ -485,7 +530,7 @@ create_or_update_load_balancer() {
 
     # サブネットIDを配列に変換
     IFS=' ' read -ra SUBNET_IDS <<< "$SUBNET_IDS_STR"
-    echo "DEBUG: サブネットID配列: ${SUBNET_IDS[@]}"
+    echo "DEBUG: サブネットID配陣: ${SUBNET_IDS[@]}"
 
     # セキュリティグループIDを配列に変換
     local SG_IDS=()
@@ -541,6 +586,8 @@ create_or_update_load_balancer() {
         if [ $? -ne 0 ]; then
             echo "  警告: ロードバランサーの状態確認に問題が発生しましたが、処理を続行します"
         fi
+
+        sleep 10
 
         # タグの追加
         if [ -n "$TAGS" ]; then

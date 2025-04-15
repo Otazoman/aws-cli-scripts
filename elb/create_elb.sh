@@ -403,6 +403,7 @@ ensure_s3_bucket() {
     local LB_TYPE=$3  # "ALB" or "NLB"
     local LB_ARN=$4   # ロードバランサーARN
     local S3_PREFIX=$5
+    local TAGS=$6
     
     echo "  S3バケット '$BUCKET_NAME' の存在を確認..."
     
@@ -416,7 +417,7 @@ ensure_s3_bucket() {
         return $?
     else
         echo "  S3バケット '$BUCKET_NAME' が存在しないため、作成します"
-        create_s3_bucket "$REGION" "$BUCKET_NAME"
+        create_s3_bucket "$REGION" "$BUCKET_NAME" "$TAGS"
         
         if [ $? -ne 0 ]; then
             return 1
@@ -439,7 +440,7 @@ configure_load_balancer_logs() {
     local ENABLE_CONNECTION_LOGS=$7
     local S3_BUCKET_NAME_CONNECTION_LOGS=$8
     local S3_PREFIX_CONNECTION_LOGS_RAW=$9
-    local S3_BUCKET_TAGS=$10
+    local TAGS=${10}
     local S3_PREFIX_ACCESS_LOGS=$(echo "$S3_PREFIX_ACCESS_LOGS_RAW" | xargs | sed 's:^/*::;s:/*$::') # 前後のスラッシュを削除
     local S3_PREFIX_CONNECTION_LOGS=$(echo "$S3_PREFIX_CONNECTION_LOGS_RAW" | xargs | sed 's:^/*::;s:/*$::') # 前後のスラッシュを削除
 
@@ -451,7 +452,7 @@ configure_load_balancer_logs() {
         fi
 
         # S3バケットの確認と作成 (アクセスログ用)
-        ensure_s3_bucket "$REGION" "$S3_BUCKET_NAME_ACCESS_LOGS" "$LB_TYPE" "$LB_ARN" "$S3_PREFIX_ACCESS_LOGS" "$S3_BUCKET_TAGS"
+        ensure_s3_bucket "$REGION" "$S3_BUCKET_NAME_ACCESS_LOGS" "$LB_TYPE" "$LB_ARN" "$S3_PREFIX_ACCESS_LOGS" "$TAGS"
         if [ $? -ne 0 ]; then
             echo " エラー: アクセスログ用S3バケットの準備に失敗しました"
             return 1
@@ -497,7 +498,7 @@ configure_load_balancer_logs() {
         fi
 
         # S3バケットの確認と作成 (接続ログ用)
-        ensure_s3_bucket "$REGION" "$S3_BUCKET_NAME_CONNECTION_LOGS" "$LB_TYPE" "$LB_ARN" "$S3_PREFIX_CONNECTION_LOGS" "$S3_BUCKET_TAGS"
+        ensure_s3_bucket "$REGION" "$S3_BUCKET_NAME_CONNECTION_LOGS" "$LB_TYPE" "$LB_ARN" "$S3_PREFIX_CONNECTION_LOGS" "$TAGS"
         if [ $? -ne 0 ]; then
             echo " エラー: ALB接続ログ用S3バケットの準備に失敗しました"
             return 1
@@ -535,7 +536,7 @@ configure_load_balancer_logs() {
         fi
 
         # S3バケットの確認と作成 (接続ログ用)
-        ensure_s3_bucket "$REGION" "$S3_BUCKET_NAME_ACCESS_LOGS" "$LB_TYPE" "$LB_ARN" "$S3_PREFIX_ACCESS_LOGS" "$S3_BUCKET_TAGS"
+        ensure_s3_bucket "$REGION" "$S3_BUCKET_NAME_ACCESS_LOGS" "$LB_TYPE" "$LB_ARN" "$S3_PREFIX_ACCESS_LOGS" "$TAGS"
         if [ $? -ne 0 ]; then
             echo " エラー: NLBアクセスログ用S3バケットの準備に失敗しました"
             return 1

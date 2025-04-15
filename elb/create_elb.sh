@@ -575,6 +575,81 @@ configure_load_balancer_logs() {
     return 0
 }
 
+# ロードバランサーの追加属性を設定する関数
+set_load_balancer_attributes() {
+    local REGION=$1
+    local LB_ARN=$2
+    local LB_TYPE=$3
+    local DELETE_PROTECTION=$4
+    local IDLE_TIMEOUT=$5
+    local WAF_FAIL_OPEN=$6
+    local CLIENT_KEEP_ALIVE=$7
+    local DESYNC_MITIGATION=$8
+    local X_FORWARDED_FOR=$9
+    local CLIENT_PORT_PRESERVATION=${10}
+    local HOST_HEADER_PRESERVATION=${11}
+    local ARC_ZONE_SHIFT=${12}
+    local ROUTING_POLICY=${13}
+    local TARGET_SELECTION=${14}
+
+    local ATTRIBUTES=()
+
+    # 共通属性
+    if [ -n "$DELETE_PROTECTION" ]; then
+        ATTRIBUTES+=("Key=deletion_protection.enabled,Value=$DELETE_PROTECTION")
+    fi
+
+    # ALB固有属性
+    if [ "$LB_TYPE" == "ALB" ]; then
+        if [ -n "$IDLE_TIMEOUT" ]; then
+            ATTRIBUTES+=("Key=idle_timeout.timeout_seconds,Value=$IDLE_TIMEOUT")
+        fi
+        if [ -n "$WAF_FAIL_OPEN" ]; then
+            ATTRIBUTES+=("Key=waf.fail_open.enabled,Value=$WAF_FAIL_OPEN")
+        fi
+        if [ -n "$CLIENT_KEEP_ALIVE" ]; then
+            ATTRIBUTES+=("Key=client_keep_alive.seconds,Value=$CLIENT_KEEP_ALIVE")
+        fi
+        if [ -n "$DESYNC_MITIGATION" ]; then
+            ATTRIBUTES+=("Key=routing.http.desync_mitigation_mode,Value=$DESYNC_MITIGATION")
+        fi
+        if [ -n "$X_FORWARDED_FOR" ]; then
+            ATTRIBUTES+=("Key=routing.http.xff_header_processing.mode,Value=$X_FORWARDED_FOR")
+        fi
+        if [ -n "$CLIENT_PORT_PRESERVATION" ]; then
+            ATTRIBUTES+=("Key=routing.http.xff_client_port.enabled,Value=$CLIENT_PORT_PRESERVATION")
+        fi
+        if [ -n "$HOST_HEADER_PRESERVATION" ]; then
+            ATTRIBUTES+=("Key=routing.http.preserve_host_header.enabled,Value=$HOST_HEADER_PRESERVATION")
+        fi
+        if [ -n "$ARC_ZONE_SHIFT" ]; then
+            ATTRIBUTES+=("Key=zonal_shift.config.enabled,Value=$ARC_ZONE_SHIFT")
+        fi
+    fi
+
+    # NLB固有属性
+    if [ "$LB_TYPE" == "NLB" ]; then
+        if [ -n "$ARC_ZONE_SHIFT" ]; then
+            ATTRIBUTES+=("Key=zonal_shift.config.enabled,Value=$ARC_ZONE_SHIFT")
+        fi
+        if [ -n "$ROUTING_POLICY" ]; then
+            ATTRIBUTES+=("Key=dns_record.client_routing_policy,Value=$ROUTING_POLICY")
+        fi
+        if [ -n "$TARGET_SELECTION" ]; then
+           ATTRIBUTES+=("Key=load_balancing.cross_zone.enabled,Value=$TARGET_SELECTION") 
+        fi
+    fi
+
+    # 追加属性がある場合は設定
+    if [ ${#ATTRIBUTES[@]} -gt 0 ]; then
+        echo "  追加属性を設定しています..."
+        aws elbv2 modify-load-balancer-attributes \
+            --load-balancer-arn "$LB_ARN" \
+            --region "$REGION" \
+            --attributes "${ATTRIBUTES[@]}"
+    fi
+}
+
 # ロードバランサーを作成または更新する関数
 create_or_update_load_balancer() {
     local REGION=$1
@@ -594,6 +669,15 @@ create_or_update_load_balancer() {
     local ENABLE_CONNECTION_LOGS=${15}
     local S3_BUCKET_NAME_CONNECTION_LOGS=${16}
     local S3_PREFIX_CONNECTION_LOGS=${17}
+    local WAF_FAIL_OPEN=${18}
+    local CLIENT_KEEP_ALIVE=${19}
+    local DESYNC_MITIGATION=${20}
+    local X_FORWARDED_FOR=${21}
+    local CLIENT_PORT_PRESERVATION=${22}
+    local HOST_HEADER_PRESERVATION=${23}
+    local ARC_ZONE_SHIFT=${24}
+    local ROUTING_POLICY=${25}
+    local TARGET_SELECTION=${26}
 
     echo "DEBUG: 入力パラメータ"
     echo "  LB_TYPE: $LB_TYPE"
@@ -611,6 +695,17 @@ create_or_update_load_balancer() {
     echo "  ENABLE_CONNECTION_LOGS: $ENABLE_CONNECTION_LOGS"
     echo "  S3_BUCKET_NAME_CONNECTION_LOGS: $S3_BUCKET_NAME_CONNECTION_LOGS"
     echo "  S3_PREFIX_CONNECTION_LOGS: $S3_PREFIX_CONNECTION_LOGS"
+    echo "  TLS_VERSION: $TLS_VERSION"
+    echo "  CIPHER_HEADER: $CIPHER_HEADER"
+    echo "  WAF_FAIL_OPEN: $WAF_FAIL_OPEN"
+    echo "  CLIENT_KEEP_ALIVE: $CLIENT_KEEP_ALIVE"
+    echo "  DESYNC_MITIGATION: $DESYNC_MITIGATION"
+    echo "  X_FORWARDED_FOR: $X_FORWARDED_FOR"
+    echo "  CLIENT_PORT_PRESERVATION: $CLIENT_PORT_PRESERVATION"
+    echo "  HOST_HEADER_PRESERVATION: $HOST_HEADER_PRESERVATION"
+    echo "  ARC_ZONE_SHIFT: $ARC_ZONE_SHIFT"
+    echo "  ROUTING_POLICY: $ROUTING_POLICY"
+    echo "  TARGET_SELECTION: $TARGET_SELECTION"
 
     # ロードバランサー名の検証
     if [[ "$LB_NAME" == internal-* ]]; then
@@ -700,26 +795,21 @@ create_or_update_load_balancer() {
     fi
 
     # 追加属性の設定
-    local ATTRIBUTES=()
-
-    # 削除保護設定
-    if [ -n "$DELETE_PROTECTION" ]; then
-        ATTRIBUTES+=("Key=deletion_protection.enabled,Value=$DELETE_PROTECTION")
-    fi
-
-    # アイドルタイムアウト設定 (ALBのみ)
-    if [ "$LB_TYPE" == "ALB" ] && [ -n "$IDLE_TIMEOUT" ]; then
-        ATTRIBUTES+=("Key=idle_timeout.timeout_seconds,Value=$IDLE_TIMEOUT")
-    fi
-
-    # 追加属性がある場合は設定
-    if [ ${#ATTRIBUTES[@]} -gt 0 ]; then
-        echo "  追加属性を設定しています..."
-        aws elbv2 modify-load-balancer-attributes \
-            --load-balancer-arn "$LB_ARN" \
-            --attributes "${ATTRIBUTES[@]}" \
-            --region "$REGION"
-    fi
+    set_load_balancer_attributes \
+        "$REGION" \
+        "$LB_ARN" \
+        "$LB_TYPE" \
+        "$DELETE_PROTECTION" \
+        "$IDLE_TIMEOUT" \
+        "$WAF_FAIL_OPEN" \
+        "$CLIENT_KEEP_ALIVE" \
+        "$DESYNC_MITIGATION" \
+        "$X_FORWARDED_FOR" \
+        "$CLIENT_PORT_PRESERVATION" \
+        "$HOST_HEADER_PRESERVATION" \
+        "$ARC_ZONE_SHIFT" \
+        "$ROUTING_POLICY" \
+        "$TARGET_SELECTION"
 
     # ログ設定 (アクセスログと接続ログ)
     if [ "$ENABLE_ACCESS_LOGS" == "true" ] || [ "$ENABLE_CONNECTION_LOGS" == "true" ]; then
@@ -749,7 +839,11 @@ create_or_update_load_balancer() {
     # ヘッダー行を読み飛ばす
     read -r header
 
-    while IFS=, read -r REGION LB_TYPE LB_NAME VPC SUBNETS SECURITY_GROUPS SCHEME IP_TYPE TAGS ENABLE_ACCESS_LOGS S3_BUCKET_NAME_ACCESS_LOGS S3_PREFIX_ACCESS_LOGS DELETE_PROTECTION IDLE_TIMEOUT ENABLE_CONNECTION_LOGS S3_BUCKET_NAME_CONNECTION_LOGS S3_PREFIX_CONNECTION_LOGS
+    while IFS=, read -r REGION LB_TYPE LB_NAME VPC SUBNETS SECURITY_GROUPS SCHEME IP_TYPE TAGS \
+        ENABLE_ACCESS_LOGS S3_BUCKET_NAME_ACCESS_LOGS S3_PREFIX_ACCESS_LOGS DELETE_PROTECTION IDLE_TIMEOUT \
+        ENABLE_CONNECTION_LOGS S3_BUCKET_NAME_CONNECTION_LOGS S3_PREFIX_CONNECTION_LOGS \
+        WAF_FAIL_OPEN CLIENT_KEEP_ALIVE DESYNC_MITIGATION X_FORWARDED_FOR \
+        CLIENT_PORT_PRESERVATION HOST_HEADER_PRESERVATION ARC_ZONE_SHIFT ROUTING_POLICY TARGET_SELECTION
     do
         # 空行をスキップ
         if [ -z "$REGION" ] && [ -z "$LB_TYPE" ] && [ -z "$LB_NAME" ]; then
@@ -776,7 +870,16 @@ create_or_update_load_balancer() {
         ENABLE_CONNECTION_LOGS=$(echo "$ENABLE_CONNECTION_LOGS" | xargs | tr '[:upper:]' '[:lower:]')
         S3_BUCKET_NAME_CONNECTION_LOGS=$(echo "$S3_BUCKET_NAME_CONNECTION_LOGS" | xargs)
         S3_PREFIX_CONNECTION_LOGS=$(echo "$S3_PREFIX_CONNECTION_LOGS" | xargs)
-
+        WAF_FAIL_OPEN=$(echo "$WAF_FAIL_OPEN" | xargs | tr '[:upper:]' '[:lower:]')
+        CLIENT_KEEP_ALIVE=$(echo "$CLIENT_KEEP_ALIVE" | xargs)
+        DESYNC_MITIGATION=$(echo "$DESYNC_MITIGATION" | xargs)
+        X_FORWARDED_FOR=$(echo "$X_FORWARDED_FOR" | xargs)
+        CLIENT_PORT_PRESERVATION=$(echo "$CLIENT_PORT_PRESERVATION" | xargs | tr '[:upper:]' '[:lower:]')
+        HOST_HEADER_PRESERVATION=$(echo "$HOST_HEADER_PRESERVATION" | xargs | tr '[:upper:]' '[:lower:]')
+        ARC_ZONE_SHIFT=$(echo "$ARC_ZONE_SHIFT" | xargs | tr '[:upper:]' '[:lower:]')
+        ROUTING_POLICY=$(echo "$ROUTING_POLICY" | xargs)
+        TARGET_SELECTION=$(echo "$TARGET_SELECTION" | xargs | tr '[:upper:]' '[:lower:]')       
+ 
         # 必須フィールドの検証
         if [ -z "$REGION" ] || [ -z "$LB_TYPE" ] || [ -z "$LB_NAME" ] || [ -z "$SUBNETS" ]; then
             echo "  エラー: 必須フィールド(REGION, TYPE, NAME, SUBNETS)が不足しています。この行をスキップします"
@@ -826,7 +929,16 @@ create_or_update_load_balancer() {
             "$IDLE_TIMEOUT" \
             "$ENABLE_CONNECTION_LOGS" \
             "$S3_BUCKET_NAME_CONNECTION_LOGS" \
-            "$S3_PREFIX_CONNECTION_LOGS")
+            "$S3_PREFIX_CONNECTION_LOGS" \
+            "$WAF_FAIL_OPEN" \
+            "$CLIENT_KEEP_ALIVE" \
+            "$DESYNC_MITIGATION" \
+            "$X_FORWARDED_FOR" \
+            "$CLIENT_PORT_PRESERVATION" \
+            "$HOST_HEADER_PRESERVATION" \
+            "$ARC_ZONE_SHIFT" \
+            "$ROUTING_POLICY" \
+            "$TARGET_SELECTION")
 
         if [ -z "$LB_ARN" ]; then
             echo "--------------------------------------------------"

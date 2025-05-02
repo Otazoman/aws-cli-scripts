@@ -1,0 +1,12 @@
+REGION,VPC_IDENTIFIER,GROUP_NAME,DESCRIPTION,ACTION,DIRECTION,PROTOCOL,FROM_PORT,TO_PORT,TARGET,RULE_DESCRIPTION
+ap-northeast-1,handson-cli-vpc,my-sg-1,My first security group1,adde,ingress,tcp,22,22,0.0.0.0/0,SSH access
+ap-northeast-1,handson-cli-vpc,my-sg-1,My first security group1,adde,egress,tcp,80,80,0.0.0.0/0,HTTP outbound
+ap-northeast-1,handson-cli-vpc,my-sg-1,My first security group1,adde,ingress,-1,,,my-sg-3,Allow all
+ap-northeast-1,handson-cli-vpc,my-sg-2,My first security group2,adde,ingress,tcp,22,22,0.0.0.0/0,SSH access
+ap-northeast-1,handson-cli-vpc,my-sg-2,My second security group2,adde,ingress,tcp,80,80,10.0.0.0/16,HTTP outbound
+ap-northeast-1,handson-cli-vpc,my-sg-2,My second security group2,adde,ingress,tcp,443,443,my-sg-1,HTTP inbound
+ap-northeast-1,handson-cli-vpc,my-sg-3,My third security group3,adde,ingress,tcp,22,22,test_plefix_list,SSH access
+ap-northeast-1,handson-cli-vpc,my-sg-3,My third security group3,adde,egress,-1,,,0.0.0.0/0,
+us-east-1,vpc-0754f8bac6a3cac1e,test-sg,Existing security group,adde,ingress,tcp,3389,3389,10.0.2.0/24,exist
+us-east-1,vpc-0754f8bac6a3cac1e,test-sg,Existing security group,adde,ingress,tcp,22,22,0.0.0.0/0,
+us-east-1,vpc-0754f8bac6a3cac1e,test-sg,Existing security group,adde,ingress,tcp,443,443,0.0.0.0/0,adde

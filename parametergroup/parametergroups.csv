@@ -1,0 +1,12 @@
+REGION,NAME,TYPE,FAMILY,DESCRIPTION,PARAMS_FILE
+ap-northeast-1,cluster-param,rds-cluster,aurora-mysql8.0,test cluster param,rds_params/test1_clusterparam.csv
+ap-northeast-1,instance-param,rds-instance,aurora-mysql8.0,test instance param,rds_params/test1_instanceparam.csv
+us-east-1,cluster-us-param,rds-cluster,aurora-mysql8.0,test cluster param,
+us-east-1,instance-us-param,rds-instance,aurora-mysql8.0,test instance param,
+ap-northeast-1,cluster-ap-param,rds-cluster,aurora-mysql8.0,test cluster param,
+ap-northeast-1,instance-ap-param,rds-instance,aurora-mysql8.0,test instance param,rds_params/test1_instanceparam.csv
+ap-northeast-1,cluster-postgre-ap-param,rds-cluster,aurora-postgresql15,test instance param,
+ap-northeast-1,instance-postgre-ap-param,rds-instance,aurora-postgresql15,test instance param,
+ap-northeast-1,test-redis-param-group,elasticache,redis6.x,Redis parameter group,elastcache_params/redis-params.csv
+ap-northeast-1,test-redis-default-params,elasticache,redis6.x,Default parameters,
+us-east-1,test-redis-us-params,elasticache,redis6.x,US region parameters,elastcache_params/redis-params.csv

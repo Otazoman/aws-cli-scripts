@@ -1,0 +1,4 @@
+REGION,OPTION_GROUP_NAME,ENGINE_NAME,ENGINE_VERSION,DESCRIPTION,OPTIONS_JSON
+ap-northeast-1,my-mysql-option-group,mysql,8.0,My custom option group for MySQL 8.0,options/mysql.json
+ap-northeast-1,my-oracle-option-group,oracle-ee,19,Oracle EE 19c with TDE and APEX,options/oracle.json
+ap-northeast-1,my-sqlserver-option-group,sqlserver-se,15.00,SQL Server with Transparent Data Encryption,options/sqlserver.json

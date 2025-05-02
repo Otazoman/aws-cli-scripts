@@ -1,0 +1,6 @@
+PARAM_NAME,VALUE,APPLY
+character_set_server,utf8mb4,pending-reboot
+collation_server,utf8mb4_general_ci,pending-reboot
+server_audit_excl_users,rdsadmin,immediate
+skip-character-set-client-handshake,1,pending-reboot
+time_zone,Asia/Tokyo,immediate

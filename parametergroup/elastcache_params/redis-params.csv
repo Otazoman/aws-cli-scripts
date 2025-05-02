@@ -1,0 +1,10 @@
+PARAM_NAME,VALUE
+activerehashing,yes
+cluster-enabled,no
+hash-max-ziplist-entries,512
+hash-max-ziplist-value,64
+maxmemory-policy,volatile-lru
+notify-keyspace-events,El
+slowlog-log-slower-than,10000
+tcp-keepalive,300
+timeout,300

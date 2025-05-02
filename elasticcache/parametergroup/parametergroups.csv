@@ -1,0 +1,4 @@
+REGION,NAME,PARAMETER_FAMILY,DESCRIPTION,PARAMS_FILE
+ap-northeast-1,test-redis-param-group,redis6.x,Redis parameter group,redis-params.csv
+ap-northeast-1,test-redis-default-params,redis6.x,Default parameters,
+us-east-1,test-redis-us-params,redis6.x,US region parameters,redis-params.csv

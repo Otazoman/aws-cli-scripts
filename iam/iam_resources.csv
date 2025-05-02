@@ -1,0 +1,13 @@
+ACTION,RESOURCE_TYPE,RESOURCE_NAME,POLICY_DOCUMENT_PATH,ATTACH_TO,IS_ADD_ATTACH,TAGS
+add,POLICY,MyCustomPolicyForUser,./policies/custom-user-policy.json,,,Env=Dev
+add,POLICY,MyCustomPolicyForRole,./policies/custom-role-policy.json,,,Env=Prod
+add,USER,TestUser1,,MyCustomPolicyForUser,FALSE,Env=Dev
+add,USER,TestUser2,,arn:aws:iam::aws:policy/IAMReadOnlyAccess,TRUE,Env=Test
+add,USER,TestUser3,,MyCustomPolicyForUser,FALSE,Env=Prod
+add,USER,TestUser3,,arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess,TRUE,Env=Prod
+add,ROLE,EC2S3Role,./policies/ec2-trust-policy.json,MyCustomPolicyForRole,FALSE,Env=Prod
+add,ROLE,LambdaDynamoDBRole,./policies/lambda-trust-policy.json,arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess,TRUE,Env=Dev
+add,ROLE,MultiServiceRole,./policies/multi-service-trust-policy.json,arn:aws:iam::aws:policy/AmazonS3FullAccess,FALSE,Env=Prod
+add,ROLE,MultiServiceRole,./policies/multi-service-trust-policy.json,arn:aws:iam::aws:policy/AmazonRDSFullAccess,TRUE,Env=Prod
+add,INSTANCE_PROFILE,EC2InstanceProfile,,EC2S3Role,,Env=Prod
+

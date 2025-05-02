@@ -1,0 +1,5 @@
+REGION,LOADBALANCERARN,LISTENERPORT,PROTOCOL,LOADBALANCERTYPE,TARGETGROUPNAMEORARN,CERTIFICATEARN,SSLPOLICY,ACTION,FORWARDTARGETGROUPS,REDIRECTURL,FIXEDRESPONSESTATUSCODE,FIXEDRESPONSEMESSAGEBODY,FIXEDRESPONSETYPE,TAGS,RULE_JSON_PATH
+ap-northeast-1,secure-alb,80,HTTP,ALB,tg-lambda,,,forward,tg-lambda,,,,,Environment=dev;Project=WebApp,./rules/http-rule1.json
+ap-northeast-1,secure-alb,8080,HTTP,ALB,,,,fixed-response,,,200,OK,text/plain,Stage=staging,./rules/http-rule2.json
+us-east-1,arn:aws:elasticloadbalancing:us-east-1:441723546431:loadbalancer/app/api-alb/12c0481e0e6b295e,443,HTTPS,ALB,,arn:aws:acm:us-east-1:441723546431:certificate/e1a90140-8044-4113-8ef0-ec831aae836c,ELBSecurityPolicy-2016-08,redirect,,https://example.com:443/path,302,,,,
+ap-northeast-1,web-nlb,80,TCP,NLB,,,,forward,arn:aws:elasticloadbalancing:ap-northeast-1:441723546431:targetgroup/tg-web/5fbb74b0d455d26f,,,,,Environment=prod,

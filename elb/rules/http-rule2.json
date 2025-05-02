@@ -1,0 +1,25 @@
+[
+  {
+    "Priority": "1",
+    "Conditions": [
+      {
+        "Field": "http-request-method",
+        "HttpRequestMethodConfig": {
+          "Values": [
+            "POST"
+          ]
+        }
+      }
+    ],
+    "Actions": [
+      {
+        "Type": "fixed-response",
+        "FixedResponseConfig": {
+          "StatusCode": "405",
+          "MessageBody": "Method Not Allowed",
+          "ContentType": "text/plain"
+        }
+      }
+    ]
+  }
+]

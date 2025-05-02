@@ -1,0 +1,4 @@
+ACTION,BUCKETNAME,REGION,VERSIONINGENABLED,PUBLICACCESSBLOCK,INTELLIGENTTIERING,LIFECYCLECONFIGFILE,POLICYFILE,TAGS,REMOVEOBJECTS
+add,ujimasa20250328-ap,ap-northeast-1,TRUE,FALSE,./policies/intelligent-tiering.json,./lifecycles/lifecycle1.json,./policies/policy1.json,Environment=Production;Project=WebApp,FALSE
+add,ujimasa20250328-us,us-east-1,FALSE,,FALSE,,,Environment=Development;Project=Test,TRUE
+add,ujimasa20250404-ap,ap-northeast-1,TRUE,FALSE,./policies/intelligent-tiering.json,./lifecycles/lifecycle1.json,,Environment=Production;Project=WebApp,FALSE

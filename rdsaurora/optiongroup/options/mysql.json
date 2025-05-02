@@ -1,0 +1,11 @@
+[
+  {
+    "OptionName": "MEMCACHED",
+    "Port": 11211,
+    "VpcSecurityGroupMemberships": ["sg-040cbdf6d8b8c55d0"]
+  },
+  {
+    "OptionName": "MARIADB_AUDIT_PLUGIN"
+  }
+]
+

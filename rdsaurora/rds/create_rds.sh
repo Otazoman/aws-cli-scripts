@@ -147,10 +147,10 @@ update_rds_instance() {
                 local trimmed_log_type=$(echo "$log_type" | xargs)
                 if [ -n "$trimmed_log_type" ]; then
                      if [ "$first" = true ]; then
-                        LOG_TYPES_JSON+="\"$trimmed_log_type\""
-                        first=false
+                         LOG_TYPES_JSON+="\"$trimmed_log_type\""
+                         first=false
                      else
-                        LOG_TYPES_JSON+=",\"$trimmed_log_type\""
+                         LOG_TYPES_JSON+=",\"$trimmed_log_type\""
                      fi
                 fi
             done
@@ -162,6 +162,22 @@ update_rds_instance() {
         fi
     fi
 
+    # Deletion Protection
+    if [ -n "$DELETION_PROTECTION" ]; then
+        if [ "$(echo "$DELETION_PROTECTION" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
+            CMD+=("--deletion-protection")
+            params_added=1
+            log "${DB_IDENTIFIER}: 削除保護を有効に設定します。"
+        elif [ "$(echo "$DELETION_PROTECTION" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then
+            CMD+=("--no-deletion-protection")
+            params_added=1
+            log "${DB_IDENTIFIER}: 削除保護を無効に設定します。"
+        else
+             log "警告: ${DB_IDENTIFIER} 設定行の DELETION_PROTECTION に無効な値 '$DELETION_PROTECTION' が指定されました ('TRUE' または 'FALSE' を使用)。この設定はスキップします。"
+        fi
+    fi
+
+
     # 何も更新パラメータがなければスキップ
     if [ "$params_added" -eq 0 ]; then
         log "${DB_IDENTIFIER} に更新可能なパラメータの変更はありません。"
@@ -170,7 +186,7 @@ update_rds_instance() {
 
     log "実行コマンド: ${CMD[*]}"
     if ! "${CMD[@]}"; then
-        log "エラー: インスタンス更新コマンドの実行に失敗しました。"
+        log "エラー: インスタンス更新コマンドの実行に失敗しました."
         return 1
     fi
     log "インスタンス更新コマンド発行完了: ${DB_IDENTIFIER}"
@@ -207,15 +223,15 @@ create_rds_instance() {
             if [ -z "$clean_tag_pair" ]; then continue; fi
 
             if [[ "$clean_tag_pair" =~ ^([^=]+)=(.+)$ ]]; then
-                 local key="${BASH_REMATCH[1]}"
-                 local value="${BASH_REMATCH[2]}"
-                 TAG_CMD_PART+=("Key=$(echo "$key" | xargs),Value=$(echo "$value" | xargs)")
+                local key="${BASH_REMATCH[1]}"
+                local value="${BASH_REMATCH[2]}"
+                TAG_CMD_PART+=("Key=$(echo "$key" | xargs),Value=$(echo "$value" | xargs)")
             elif [[ "$clean_tag_pair" =~ ^([^=]+)$ ]]; then
-                 local key="${BASH_REMATCH[1]}"
-                 TAG_CMD_PART+=("Key=$(echo "$key" | xargs),Value=")
-                 log "警告: タグ '$clean_tag_pair' は 'キー=値' の形式ではありません。Key=$(echo "$key" | xargs),Value= として処理します。"
+                local key="${BASH_REMATCH[1]}"
+                TAG_CMD_PART+=("Key=$(echo "$key" | xargs),Value=")
+                log "警告: タグ '$clean_tag_pair' は 'キー=値' の形式ではありません。Key=$(echo "$key" | xargs),Value= として処理します。"
             else
-                 log "警告: 無効なタグ形式 '$clean_tag_pair' をスキップします。"
+                log "警告: 無効なタグ形式 '$clean_tag_pair' をスキップします。"
             fi
         done
     fi
@@ -263,6 +279,18 @@ create_rds_instance() {
         if [ "${#TAG_CMD_PART[@]}" -gt 0 ]; then
             CMD+=("${TAG_CMD_PART[@]}")
         fi
+        # Deletion Protection
+        if [ -n "$DELETION_PROTECTION" ]; then
+            if [ "$(echo "$DELETION_PROTECTION" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
+                CMD+=("--deletion-protection")
+                log "${DB_IDENTIFIER}: 削除保護を有効に設定します."
+            elif [ "$(echo "$DELETION_PROTECTION" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then
+                CMD+=("--no-deletion-protection")
+                log "${DB_IDENTIFIER}: 削除保護を無効に設定します."
+            else
+                log "警告: ${DB_IDENTIFIER} 設定行の DELETION_PROTECTION に無効な値 '$DELETION_PROTECTION' が指定されました ('TRUE' または 'FALSE' を使用). この設定はスキップします."
+            fi
+        fi
 
     # ポイントインタイムリカバリの場合
     elif [ -n "$SOURCE_DB_IDENTIFIER" ]; then
@@ -305,6 +333,18 @@ create_rds_instance() {
         fi
         if [ "${#TAG_CMD_PART[@]}" -gt 0 ]; then
             CMD+=("${TAG_CMD_PART[@]}")
+        fi
+        # Deletion Protection
+        if [ -n "$DELETION_PROTECTION" ]; then
+            if [ "$(echo "$DELETION_PROTECTION" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
+                CMD+=("--deletion-protection")
+                log "${DB_IDENTIFIER}: 削除保護を有効に設定します."
+            elif [ "$(echo "$DELETION_PROTECTION" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then
+                CMD+=("--no-deletion-protection")
+                log "${DB_IDENTIFIER}: 削除保護を無効に設定します."
+            else
+                log "警告: ${DB_IDENTIFIER} 設定行の DELETION_PROTECTION に無効な値 '$DELETION_PROTECTION' が指定されました ('TRUE' または 'FALSE' を使用). この設定はスキップします."
+            fi
         fi
 
     # 新規作成の場合
@@ -371,30 +411,42 @@ create_rds_instance() {
         fi
         # 認証情報の設定 (Secrets Manager 優先)
         if [ -n "$SECRET_MANAGER_ARN" ]; then
-            log "${DB_IDENTIFIER}: Secrets Manager ARN を使用して認証情報を設定します。"
+            log "${DB_IDENTIFIER}: Secrets Manager ARN を使用して認証情報を設定します."
             CMD+=("--master-user-secret-arn" "$SECRET_MANAGER_ARN")
         elif [ -n "$MASTER_USERNAME" ] && [ -n "$MASTER_PASSWORD" ]; then
-            log "${DB_IDENTIFIER}: マスターユーザー名とパスワードを使用して認証情報を設定します。"
+            log "${DB_IDENTIFIER}: マスターユーザー名とパスワードを使用して認証情報を設定します."
             CMD+=("--master-username" "$MASTER_USERNAME")
             CMD+=("--master-user-password" "$MASTER_PASSWORD")
         else
-            log "エラー: 新規作成には Secrets Manager ARN または マスターユーザー名/マスターパスワード ペアのどちらかが必要です。"
+            log "エラー: 新規作成には Secrets Manager ARN または マスターユーザー名/マスターパスワード ペアのどちらかが必要です."
             return 1
         fi
         # タグ
         if [ "${#TAG_CMD_PART[@]}" -gt 0 ]; then
             CMD+=("${TAG_CMD_PART[@]}")
         fi
+        # Deletion Protection
+        if [ -n "$DELETION_PROTECTION" ]; then
+            if [ "$(echo "$DELETION_PROTECTION" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
+                CMD+=("--deletion-protection")
+                log "${DB_IDENTIFIER}: 削除保護を有効に設定します."
+            elif [ "$(echo "$DELETION_PROTECTION" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then
+                CMD+=("--no-deletion-protection")
+                log "${DB_IDENTIFIER}: 削除保護を無効に設定します."
+            else
+                log "警告: ${DB_IDENTIFIER} 設定行の DELETION_PROTECTION に無効な値 '$DELETION_PROTECTION' が指定されました ('TRUE' または 'FALSE' を使用). この設定はスキップします."
+            fi
+        fi
     fi
 
     if [ ${#CMD[@]} -eq 0 ]; then
-        log "エラー: インスタンス作成/復元のためのコマンドが構築できませんでした。設定を確認してください。"
+        log "エラー: インスタンス作成/復元のためのコマンドが構築できませんでした. 設定を確認してください."
         return 1
     fi
 
     log "実行コマンド: ${CMD[*]}"
     if ! "${CMD[@]}"; then
-        log "エラー: インスタンス作成/復元コマンドの実行に失敗しました。"
+        log "エラー: インスタンス作成/復元コマンドの実行に失敗しました."
         return 1
     fi
     log "インスタンス作成/復元コマンド発行完了: ${DB_IDENTIFIER}"
@@ -407,7 +459,7 @@ main() {
     CONFIG_CSV="$1"
 
     if [ -z "$CONFIG_CSV" ]; then
-        error_exit "設定CSVファイルを指定してください。"
+        error_exit "設定CSVファイルを指定してください."
     fi
 
     if [ ! -f "$CONFIG_CSV" ]; then
@@ -417,7 +469,8 @@ main() {
     log "設定ファイル ${CONFIG_CSV} を読み込み開始"
 
     # CSVファイルの内容を読み込んで処理
-    while IFS=, read -r REGION DB_IDENTIFIER ENGINE ENGINE_VERSION INSTANCE_CLASS STORAGE_TYPE ALLOCATED_STORAGE MAX_ALLOCATED_STORAGE DB_NAME MASTER_USERNAME MASTER_PASSWORD VPC_SG_IDS SUBNET_GROUP PARAM_GROUP OPT_GROUP PUBLIC_ACCESS ENABLE_PERFORMANCE_INSIGHTS BACKUP_RETENTION BACKUP_WINDOW MAINTENANCE_WINDOW PERFORMANCE_RETENTION TAGS MULTI_AZ LOG_EXPORTS SNAPSHOT_IDENTIFIER SOURCE_DB_IDENTIFIER SECRET_MANAGER_ARN; do
+    # DELETION_PROTECTION カラムを追加
+    while IFS=, read -r REGION DB_IDENTIFIER ENGINE ENGINE_VERSION INSTANCE_CLASS STORAGE_TYPE ALLOCATED_STORAGE MAX_ALLOCATED_STORAGE DB_NAME MASTER_USERNAME MASTER_PASSWORD VPC_SG_IDS SUBNET_GROUP PARAM_GROUP OPT_GROUP PUBLIC_ACCESS ENABLE_PERFORMANCE_INSIGHTS BACKUP_RETENTION BACKUP_WINDOW MAINTENANCE_WINDOW PERFORMANCE_RETENTION TAGS MULTI_AZ LOG_EXPORTS SNAPSHOT_IDENTIFIER SOURCE_DB_IDENTIFIER SECRET_MANAGER_ARN DELETION_PROTECTION; do
         # ヘッダー行と空行をスキップ
         if [ "$(echo "$REGION" | xargs)" = "REGION" ]; then continue; fi
         if [ -z "$(echo "$REGION" | xargs)" ] && [ -z "$(echo "$DB_IDENTIFIER" | xargs)" ]; then continue; fi
@@ -452,16 +505,18 @@ main() {
         SNAPSHOT_IDENTIFIER=$(echo "$SNAPSHOT_IDENTIFIER" | xargs)
         SOURCE_DB_IDENTIFIER=$(echo "$SOURCE_DB_IDENTIFIER" | xargs)
         SECRET_MANAGER_ARN=$(echo "$SECRET_MANAGER_ARN" | xargs)
+        DELETION_PROTECTION=$(echo "$DELETION_PROTECTION" | tr -d '\r' | xargs)
+
 
         # 必須項目チェック
         if [ -z "$DB_IDENTIFIER" ] || [ -z "$REGION" ] || [ -z "$ENGINE" ]; then
-             log "エラー: ${DB_IDENTIFIER} 設定行に必須パラメータ (REGION, DB_IDENTIFIER, ENGINE) の不足または無効な値があります。この行はスキップします。"
+             log "エラー: ${DB_IDENTIFIER} 設定行に必須パラメータ (REGION, DB_IDENTIFIER, ENGINE) の不足または無効な値があります. この行はスキップします."
              continue
         fi
 
         # 復元タイプと新規作成の組み合わせチェック
         if [ -n "$SNAPSHOT_IDENTIFIER" ] && [ -n "$SOURCE_DB_IDENTIFIER" ]; then
-             log "エラー: ${DB_IDENTIFIER} 設定行で SNAPSHOT_IDENTIFIER と SOURCE_DB_IDENTIFIER の両方が指定されています。どちらか一方のみを指定してください。この行はスキップします。"
+             log "エラー: ${DB_IDENTIFIER} 設定行で SNAPSHOT_IDENTIFIER と SOURCE_DB_IDENTIFIER の両方が指定されています. どちらか一方のみを指定してください. この行はスキップします."
              continue
         fi
 
@@ -469,34 +524,34 @@ main() {
         if [ -z "$SNAPSHOT_IDENTIFIER" ] && [ -z "$SOURCE_DB_IDENTIFIER" ]; then
              # 認証情報検証
              if [ -z "$SECRET_MANAGER_ARN" ] && ( [ -z "$MASTER_USERNAME" ] || [ -z "$MASTER_PASSWORD" ] ); then
-                  log "エラー: ${DB_IDENTIFIER} 設定行で新規作成のための Secrets Manager ARN または マスターユーザー名/マスターパスワード ペアが指定されていません。この行はスキップします。"
-                  continue
+                 log "エラー: ${DB_IDENTIFIER} 設定行で新規作成のための Secrets Manager ARN または マスターユーザー名/マスターパスワード ペアが指定されていません. この行はスキップします."
+                 continue
              fi
              # DB Subnet Groupが必須
              if [ -z "$SUBNET_GROUP" ]; then
-               log "エラー: ${DB_IDENTIFIER} 設定行で SUBNET_GROUP が指定されていません。新規作成時には必須です。この行はスキップします。"
-               continue
+                log "エラー: ${DB_IDENTIFIER} 設定行で SUBNET_GROUP が指定されていません. 新規作成時には必須です. この行はスキップします."
+                continue
              fi
              # EngineVersionが必須
              if [ -z "$ENGINE_VERSION" ]; then
-               log "エラー: ${DB_IDENTIFIER} 設定行で ENGINE_VERSION が指定されていません。新規作成時には必須です。"
-               continue
+                log "エラー: ${DB_IDENTIFIER} 設定行で ENGINE_VERSION が指定されていません. 新規作成時には必須です."
+                continue
              fi
              # DB Instance Classが必須
              if [ -z "$INSTANCE_CLASS" ]; then
-               log "エラー: ${DB_IDENTIFIER} 設定行で INSTANCE_CLASS が指定されていません。新規作成時には必須です。"
-               continue
+                log "エラー: ${DB_IDENTIFIER} 設定行で INSTANCE_CLASS が指定されていません. 新規作成時には必須です."
+                continue
              fi
              # Allocated Storageが必須
              if [ -z "$ALLOCATED_STORAGE" ]; then
-               log "エラー: ${DB_IDENTIFIER} 設定行で ALLOCATED_STORAGE が指定されていません。新規作成時には必須です。"
-               continue
+                log "エラー: ${DB_IDENTIFIER} 設定行で ALLOCATED_STORAGE が指定されていません. 新規作成時には必須です."
+                continue
              fi
         else # 復元系の場合の必須パラメータ検証
              # DB Subnet Groupが必須
              if [ -z "$SUBNET_GROUP" ]; then
-               log "エラー: ${DB_IDENTIFIER} 設定行で SUBNET_GROUP が指定されていません。復元時には必須です。この行はスキップします。"
-               continue
+                log "エラー: ${DB_IDENTIFIER} 設定行で SUBNET_GROUP が指定されていません. 復元時には必須です. この行はスキップします."
+                continue
              fi
         fi
 
@@ -504,18 +559,18 @@ main() {
         local instance_status=$(check_instance_exists "$DB_IDENTIFIER" "$REGION")
 
         if [ -n "$instance_status" ]; then
-            log "インスタンス ${DB_IDENTIFIER} は既に存在します (状態: ${instance_status})。"
+            log "インスタンス ${DB_IDENTIFIER} は既に存在します (状態: ${instance_status})."
             # 存在するインスタンスに対してはパラメータ更新を行う
             update_rds_instance
         else
-            log "インスタンス ${DB_IDENTIFIER} は存在しません。新規作成または復元を開始します。"
+            log "インスタンス ${DB_IDENTIFIER} は存在しません. 新規作成または復元を開始します."
             create_rds_instance
         fi
 
         log "--- ${DB_IDENTIFIER} の処理完了 ---"
     done < <(tail -n +2 "$CONFIG_CSV")
 
-    log "CSVファイルのすべてのエントリの処理が完了しました。"
+    log "CSVファイルのすべてのエントリの処理が完了しました."
 }
 
 # スクリプト実行時にmain関数を呼び出し、コマンドライン引数を渡す

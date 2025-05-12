@@ -266,16 +266,6 @@ create_rds_instance() {
             if [ "$(echo "$MULTI_AZ" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then CMD+=("--multi-az"); fi
             if [ "$(echo "$MULTI_AZ" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then CMD+=("--no-multi-az"); fi
         fi
-        if [ -n "$ENABLE_PERFORMANCE_INSIGHTS" ]; then
-            if [ "$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
-                CMD+=("--enable-performance-insights")
-                if [ -n "$PERFORMANCE_RETENTION" ]; then
-                    CMD+=("--performance-insights-retention-period" "$PERFORMANCE_RETENTION")
-                fi
-            elif [ "$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then
-                CMD+=("--no-enable-performance-insights")
-            fi
-        fi
         if [ "${#TAG_CMD_PART[@]}" -gt 0 ]; then
             CMD+=("${TAG_CMD_PART[@]}")
         fi
@@ -298,7 +288,7 @@ create_rds_instance() {
         CMD=(
             "aws" "rds" "restore-db-instance-to-point-in-time"
             "--region" "$REGION"
-            "--db-instance-identifier" "$DB_IDENTIFIER"
+            "--target-db-instance-identifier" "$DB_IDENTIFIER"
             "--source-db-instance-identifier" "$SOURCE_DB_IDENTIFIER"
             "--db-subnet-group-name" "$SUBNET_GROUP"
             "--use-latest-restorable-time"
@@ -320,16 +310,6 @@ create_rds_instance() {
         if [ -n "$MULTI_AZ" ]; then
             if [ "$(echo "$MULTI_AZ" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then CMD+=("--multi-az"); fi
             if [ "$(echo "$MULTI_AZ" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then CMD+=("--no-multi-az"); fi
-        fi
-        if [ -n "$ENABLE_PERFORMANCE_INSIGHTS" ]; then
-            if [ "$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
-                CMD+=("--enable-performance-insights")
-                if [ -n "$PERFORMANCE_RETENTION" ]; then
-                    CMD+=("--performance-insights-retention-period" "$PERFORMANCE_RETENTION")
-                fi
-            elif [ "$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then
-                CMD+=("--no-enable-performance-insights")
-            fi
         fi
         if [ "${#TAG_CMD_PART[@]}" -gt 0 ]; then
             CMD+=("${TAG_CMD_PART[@]}")

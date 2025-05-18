@@ -341,6 +341,26 @@ return 1 # Failure
 # スクリプトの使い方を表示する関数 (引数チェックで使用)
 usage() {
 echo "使い方: $0 <csv_ファイルパス>"
+echo ""
+echo "CSVファイルフォーマット:"
+echo "ACTION,REGION,EFS_NAME,ENCRYPTED,PERFORMANCE_MODE,THROUGHPUT_MODE,PROVISIONED_THROUGHPUT_MIBPS,LC_TRANSITION_IA_DAYS,LC_TRANSITION_ARCHIVE_DAYS,LC_TRANSITION_PRIMARY_ON_ACCESS,BACKUP_ENABLED,TAGS,SUBNETS,SECURITY_GROUPS,ACCESS_POINTS"
+echo ""
+echo "ACTION: 'add' または 'remove'"
+echo "REGION: AWSリージョンコード (例: ap-northeast-1)"
+echo "EFS_NAME: EFSファイルシステム名 (Nameタグの値)"
+echo "ENCRYPTED: 暗号化 ('TRUE' または 'FALSE')"
+echo "PERFORMANCE_MODE: 'generalPurpose' または 'maxIO'"
+echo "THROUGHPUT_MODE: 'bursting', 'provisioned', 'elastic'"
+echo "PROVISIONED_THROUGHPUT_MIBPS: throughput-modeがprovisionedの場合に必須 (数値, MiB/s)"
+echo "LC_TRANSITION_IA_DAYS: ライフサイクルIA移行日数 (14, 30, 60, 90, 180, 270, 365, 400, 500), 設定しない場合は空欄"
+echo "LC_TRANSITION_ARCHIVE_DAYS: ライフサイクルARCHIVE移行日数 (90, 180, 270, 365, 400, 500), 設定しない場合は空欄"
+echo "LC_TRANSITION_PRIMARY_ON_ACCESS: Primary Storageへの移行 ('TRUE' または 'FALSE'), 設定しない場合は空欄"
+echo "BACKUP_ENABLED: バックアップ有効化 ('TRUE' または 'FALSE')"
+echo "TAGS: 追加するタグ (Key=Value形式), 複数指定はセミコロン';'で区切る (例: Env=Dev;Project=AppA)"
+echo "SUBNETS: マウントターゲット作成用サブネット名またはID, 複数指定はセミコロン';'で区切る"
+echo "SECURITY_GROUPS: マウントターゲット作成用セキュリティグループ名またはID, 複数指定はセミコロン';'で区切る (SUBNETSと同じ数だけ指定)"
+echo "ACCESS_POINTS: アクセスポイント設定 (Path|Name形式), 複数指定はセミコロン';'で区切る (例: /data|data-ap;/logs|logs-ap)"
+
 exit 1
 }
 
@@ -362,16 +382,18 @@ echo "-------------------------------------"
 
 # CSVファイルを1行ずつ読み込み、フィールドを配列に格納
 # プロセス置換 < <(...) を使用して、変数スコープの問題を回避
-# ACTION カラムが追加され、さらに PROVISIONED_THROUGHPUT_MIBPS が追加されたため、フィールド数は14になる
+# ACTION, TAGS が追加され、さらに PROVISIONED_THROUGHPUT_MIBPS が追加されたため、フィールド数は15になる
 # read コマンドと変数割り当てを修正
 tail -n +2 "$CSV_FILE" | while IFS=, read -r -a fields; do
 
-# 期待されるフィールド数 (ACTION + PROVISIONED_THROUGHPUT_MIBPS カラム追加により14個になる)
-expected_fields=14
+# 期待されるフィールド数 (ACTION + TAGS + PROVISIONED_THROUGHPUT_MIBPS カラム追加により15個になる)
+expected_fields=15
 
 # フィールド数が期待通りかチェック
 if [ "${#fields[@]}" -ne "$expected_fields" ]; then
  log "ERROR" "CSVの行のフィールド数が期待値 ($expected_fields個) と異なります (${#fields[@]}個)。この行をスキップします。" >&2
+ # 出力されたフィールドをデバッグ用に表示する場合 (コメントアウトを解除して使用)
+ # log "DEBUG" "Row fields: ${fields[@]}" >&2
  continue # 次のCSV行へスキップ
 fi
 
@@ -388,9 +410,11 @@ LC_TRANSITION_IA_DAYS_RAW="${fields[7]:-}"
 LC_TRANSITION_ARCHIVE_DAYS_RAW="${fields[8]:-}"
 LC_TRANSITION_PRIMARY_ON_ACCESS_RAW="${fields[9]:-}"
 BACKUP_ENABLED_RAW="${fields[10]:-}"
-SUBNETS_STR_RAW="${fields[11]:-}"
-SECURITY_GROUPS_STR_RAW="${fields[12]:-}"
-ACCESS_POINTS_STR_RAW="${fields[13]:-}"
+TAGS_STR_RAW="${fields[11]:-}" # 新しいTAGSカラム
+SUBNETS_STR_RAW="${fields[12]:-}" # インデックスが1つずれた
+SECURITY_GROUPS_STR_RAW="${fields[13]:-}" # インデックスが1つずれた
+ACCESS_POINTS_STR_RAW="${fields[14]:-}" # インデックスが1つずれた
+
 
 # 各変数の前後の空白文字をトリム (sed 関数を使用)
 # ここでも local は不要。
@@ -405,9 +429,10 @@ LC_TRANSITION_IA_DAYS=$(trim_whitespace "$LC_TRANSITION_IA_DAYS_RAW")
 LC_TRANSITION_ARCHIVE_DAYS=$(trim_whitespace "$LC_TRANSITION_ARCHIVE_DAYS_RAW")
 LC_TRANSITION_PRIMARY_ON_ACCESS=$(trim_whitespace "$LC_TRANSITION_PRIMARY_ON_ACCESS_RAW")
 BACKUP_ENABLED=$(trim_whitespace "$BACKUP_ENABLED_RAW")
-SUBNETS_STR=$(trim_whitespace "$SUBNETS_STR_RAW")
-SECURITY_GROUPS_STR=$(trim_whitespace "$SECURITY_GROUPS_STR_RAW")
-ACCESS_POINTS_STR=$(trim_whitespace "$ACCESS_POINTS_STR_RAW")
+TAGS_STR=$(trim_whitespace "$TAGS_STR_RAW") # 新しいTAGSカラム
+SUBNETS_STR=$(trim_whitespace "$SUBNETS_STR_RAW") # インデックスが1つずれた
+SECURITY_GROUPS_STR=$(trim_whitespace "$SECURITY_GROUPS_STR_RAW") # インデックスが1つずれた
+ACCESS_POINTS_STR=$(trim_whitespace "$ACCESS_POINTS_STR_RAW") # インデックスが1つずれた
 
 
 log "INFO" "--- EFSエントリを処理中: '$ACTION' on '$EFS_NAME' (リージョン: $REGION) ---"
@@ -450,6 +475,7 @@ case "$ACTION" in
   PROVISIONED_THROUGHPUT_ARGS=("--provisioned-throughput-in-mibps" "$PROVISIONED_THROUGHPUT_MIBPS")
  fi
 
+
  # --- EFSの存在チェックと処理分岐 (ロジックを修正) ---
  # get_efs_id_by_name関数は以下を返す:
  # 0: 見つかった (IDをecho)
@@ -483,32 +509,56 @@ case "$ACTION" in
  CREATE_EFS_ARGS=(
   "efs" "create-file-system"
   "--region" "$REGION"
-  "--tags" "Key=Name,Value=\"$EFS_NAME\""
+  "--tags" "Key=Name,Value=\"$EFS_NAME\"" # Nameタグは必須として常に設定
   "--performance-mode" "$PERFORMANCE_MODE"
   "--throughput-mode" "$THROUGHPUT_MODE"
   "--query" "FileSystemId"
   "--output" "text"
  )
 
-  ENCRYPTED_FLAG=""
-  if [[ "$ENCRYPTED" =~ ^[TtYy1] ]]; then # true, yes, Y, 1 (大文字小文字区別なし) で始まるかチェック
-    ENCRYPTED_FLAG="--encrypted"
-  fi
-
-  BACKUP_STATUS="" # 変数の初期化
-  if [[ "$BACKUP_ENABLED" =~ ^[TtYy1] ]]; then # true, yes, Y, 1 (大文字小文字区別なし) で始まるかチェック
-    BACKUP_STATUS="ENABLED"
-  fi
-
-
- # throughput-mode が provisioned の場合のみ、 provisioned-throughput-in-mibps 引数を追加
- # PROVISIONED_THROUGHPUT_ARGS は既に検証済み
+ # provisioned-throughput-in-mibps 引数を追加 (throughput-modeがprovisionedの場合のみ)
  CREATE_EFS_ARGS+=("${PROVISIONED_THROUGHPUT_ARGS[@]}")
 
-
  # 暗号化フラグを追加
- if [ -n "$ENCRYPTED_FLAG" ]; then
-  CREATE_EFS_ARGS+=("$ENCRYPTED_FLAG")
+ if [[ "$ENCRYPTED" =~ ^[TtYy1] ]]; then # true, yes, Y, 1 (大文字小文字区別なし) で始まるかチェック
+  CREATE_EFS_ARGS+=("--encrypted")
+ fi
+
+ # 追加のタグを処理してCREATE_EFS_ARGSに追加
+ ADDITIONAL_TAGS_ARGS=()
+ if [ -n "$TAGS_STR" ]; then
+  log "INFO" "追加のタグを処理中: '$TAGS_STR'"
+  # セミコロンで分割
+  IFS=';' read -r -a tags_array <<< "$TAGS_STR"
+  for tag_pair in "${tags_array[@]}"; do
+  local trimmed_tag_pair=$(trim_whitespace "$tag_pair")
+  if [ -n "$trimmed_tag_pair" ]; then
+    # Key=Value 形式かチェックし、分割
+    if [[ "$trimmed_tag_pair" == *'='* ]]; then
+    # 最初の'='で分割
+    local tag_key="${trimmed_tag_pair%%=*}"
+    local tag_value="${trimmed_tag_pair#*=}"
+    # KeyとValueが空でないかチェック (Key=, =Value, = のような不正形式を防ぐ)
+    if [ -n "$tag_key" ] && [ -n "$tag_value" ]; then
+      ADDITIONAL_TAGS_ARGS+=("Key=$tag_key,Value=\"$tag_value\"")
+    else
+      log "WARN" "不正なタグのKeyまたはValueが検出されました。スキップします: '$trimmed_tag_pair'" >&2
+    fi
+    else
+    log "WARN" "不正なタグフォーマットが検出されました ('Key=Value' 形式である必要があります)。スキップします: '$trimmed_tag_pair'" >&2
+    fi
+  fi
+  done
+ fi
+
+ # ADDITIONAL_TAGS_ARGSがある場合のみ、--tags 引数として追加
+ # `--tags` は複数回指定できるため、Nameタグの後に追加するのが最も簡単
+ if [ "${#ADDITIONAL_TAGS_ARGS[@]}" -gt 0 ]; then
+  # 配列を展開して `--tags` 引数として追加
+  # 各要素は既に `Key=...,Value="..."` 形式になっている
+  for tag_arg in "${ADDITIONAL_TAGS_ARGS[@]}"; do
+    CREATE_EFS_ARGS+=("--tags" "$tag_arg")
+  done
  fi
 
 
@@ -546,26 +596,78 @@ case "$ACTION" in
 
 
  # --- Configure Lifecycle Policy ---
- # LIFECYCLE_POLICY_JSON は上で組み立て済み
- if [ -n "$LIFECYCLE_POLICY_JSON" ]; then # JSON文字列が空でなければ設定を実行
+ log "INFO" "EFS '$FILE_SYSTEM_ID' のライフサイクルポリシー設定を構築中..."
+ LIFECYCLE_POLICY_JSON=""
+ lc_rules=() # ライフサイクルルールを格納する配列
+
+ # 有効なライフサイクル移行日数
+ valid_ia_days="14 30 60 90 180 270 365 400 500"
+ valid_archive_days="90 180 270 365 400 500"
+
+ # IA移行ポリシーの構築
+ if [ -n "$LC_TRANSITION_IA_DAYS" ]; then
+  if [[ "$valid_ia_days" =~ (^|[[:space:]])"$LC_TRANSITION_IA_DAYS"($|[[:space:]]) ]]; then
+   lc_rules+=("{\"TransitionToIA\": \"AFTER_${LC_TRANSITION_IA_DAYS}_DAYS\"}")
+  else
+   log "WARN" "EFS '$FILE_SYSTEM_ID' 用の無効なIA移行日数 '$LC_TRANSITION_IA_DAYS' が指定されました。有効な日数: $valid_ia_days。この設定をスキップします。" >&2
+  fi
+ else
+  log "INFO" "IA移行ポリシー設定: 指定されていません。"
+ fi
+
+ # Archive移行ポリシーの構築
+ if [ -n "$LC_TRANSITION_ARCHIVE_DAYS" ]; then
+  if [[ "$valid_archive_days" =~ (^|[[:space:]])"$LC_TRANSITION_ARCHIVE_DAYS"($|[[:space:]]) ]]; then
+   lc_rules+=("{\"TransitionToArchive\": \"AFTER_${LC_TRANSITION_ARCHIVE_DAYS}_DAYS\"}")
+  else
+    log "WARN" "EFS '$FILE_SYSTEM_ID' 用の無効なArchive移行日数 '$LC_TRANSITION_ARCHIVE_DAYS' が指定されました。有効な日数: $valid_archive_days。この設定をスキップします。" >&2
+  fi
+ else
+  log "INFO" "Archive移行ポリシー設定: 指定されていません。"
+ fi
+
+ # Primary Storage移行ポリシーの構築
+ if [[ "$LC_TRANSITION_PRIMARY_ON_ACCESS" =~ ^[TtYy1] ]]; then # true, yes, Y, 1 (大文字小文字区別なし) で始まるかチェック
+  lc_rules+=("{\"TransitionToPrimaryStorageClass\": \"AFTER_FILE_ACCESS\"}")
+ elif [ -n "$LC_TRANSITION_PRIMARY_ON_ACCESS" ]; then
+   log "WARN" "EFS '$FILE_SYSTEM_ID' 用の無効なPrimary Storage移行設定 '$LC_TRANSITION_PRIMARY_ON_ACCESS' が指定されました ('TRUE' または 'FALSE' を使用してください)。この設定をスキップします。" >&2
+ else
+  log "INFO" "Primary Storage移行ポリシー設定: 指定されていません。"
+ fi
+
+
+ # ルールが1つでもあればJSONを構築
+ if [ "${#lc_rules[@]}" -gt 0 ]; then
+  # 配列要素をカンマで結合し、[]で囲む
+  LIFECYCLE_POLICY_JSON="[$(IFS=,; echo "${lc_rules[*]--}")]" # -- を追加して空配列展開時のエラー防止
+  log "INFO" "構築されたライフサイクルポリシーJSON: $LIFECYCLE_POLICY_JSON"
   log "INFO" "EFS '$FILE_SYSTEM_ID' のライフサイクルポリシーを設定中..."
   # 設定失敗は警告として扱い、スクリプトは続行
+  # put-lifecycle-configuration は成功しても何も出力しないことが多い
   aws efs put-lifecycle-configuration \
    --region "$REGION" \
    --file-system-id "$FILE_SYSTEM_ID" \
    --lifecycle-policies "$LIFECYCLE_POLICY_JSON" 2>&1 | while read -r line; do log "INFO" "put-lifecycle-configuration: $line"; done || log "WARN" "EFS '$FILE_SYSTEM_ID' のライフサイクルポリシー設定に失敗しました。" >&2
  else
-  log "INFO" "ライフサイクルポリシー設定: EFS '$FILE_SYSTEM_ID' 用に指定されていません。"
+  log "INFO" "ライフサイクルポリシー設定: EFS '$FILE_SYSTEM_ID' 用に有効なポリシーが指定されていません。"
  fi
 
+
  # --- Enable Automatic Backup ---
- # BACKUP_STATUS は上で判定済み ("ENABLED" or "DISABLED")
+ # BACKUP_ENABLED は上で判定済み ("TRUE" or "FALSE" に対応)
+ BACKUP_STATUS="DISABLED" # デフォルトは無効
+ if [[ "$BACKUP_ENABLED" =~ ^[TtYy1] ]]; then # true, yes, Y, 1 (大文字小文字区別なし) で始まるかチェック
+   BACKUP_STATUS="ENABLED"
+ fi
+
  log "INFO" "EFS '$FILE_SYSTEM_ID' のバックアップポリシー ($BACKUP_STATUS) を設定中..."
  # 設定失敗は警告として扱い、スクリプトは続行
+ # put-backup-policy は成功しても何も出力しないことが多い
  aws efs put-backup-policy \
   --region "$REGION" \
   --file-system-id "$FILE_SYSTEM_ID" \
   --backup-policy Status="$BACKUP_STATUS" 2>&1 | while read -r line; do log "INFO" "put-backup-policy: $line"; done || log "WARN" "EFS '$FILE_SYSTEM_ID' のバックアップポリシー設定に失敗しました。" >&2
+
 
   # --- Create Mount Targets ---
   # サブネットとセキュリティグループの文字列をセミコロンで分割
@@ -645,6 +747,7 @@ case "$ACTION" in
    log "INFO" "EFS '$FILE_SYSTEM_ID' 用のアクセスポイントは指定されていません。"
   fi
 
+
  log "INFO" "--- EFS '$EFS_NAME' (ID: $FILE_SYSTEM_ID, リージョン: $REGION) の作成および設定完了 ---"
  ;; # add アクションの終わり
 
@@ -680,6 +783,48 @@ case "$ACTION" in
 
 
  log "INFO" "EFSファイルシステム '$EFS_NAME' (ID: $FILE_SYSTEM_ID, リージョン: $REGION) を削除します。"
+
+ # --- Delete Access Points ---
+ # 削除前にアクセスポイントを列挙し、すべて削除する
+ log "INFO" "EFS '$FILE_SYSTEM_ID' に関連付けられたアクセスポイントを削除中..."
+ # アクセスポイント列挙の aws コマンドが失敗した場合もチェック
+ AP_IDS=$(aws efs describe-access-points \
+  --region "$REGION" \
+  --file-system-id "$FILE_SYSTEM_ID" \
+  --query "AccessPoints[].AccessPointId" \
+  --output text 2>&1) # Capture stderr
+ local describe_ap_exit_code=$?
+
+ # aws describe-access-points コマンド自体が失敗した場合
+ if [ $describe_ap_exit_code -ne 0 ] || echo "$AP_IDS" | grep -q 'ERROR\|Exception'; then
+  # ファイルシステムが既に削除されているNotFoundExceptionの場合はエラーとしない
+  if ! echo "$AP_IDS" | grep -q 'FileSystemNotFound\|NotFoundException'; then
+  log "ERROR" "EFS '$FILE_SYSTEM_ID' のアクセスポイント列挙に失敗しました: $AP_IDS。マウントターゲットおよびファイルシステム削除をスキップします。" >&2
+  continue # 次のCSV行へスキップ
+  else
+  # ファイルシステムが見つからないエラーはアクセスポイントも当然ないとして処理を続行
+  log "WARN" "EFSファイルシステム '$FILE_SYSTEM_ID' が見つかりませんでした（既に削除されている可能性）。アクセスポイントの削除は不要です。" >&2
+  AP_IDS="" # アクセスポイントは無いと見なす
+  fi
+ fi
+
+ # AP_IDS が空でない場合のみ処理を続行
+ if [ -n "$(trim_whitespace "$AP_IDS")" ]; then # AP_IDS自体にエラーメッセージが入っている可能性もあるためトリムしてチェック
+  # スペース区切りでIDをループ処理
+  log "INFO" "EFS '$FILE_SYSTEM_ID' に関連付けられたアクセスポイントを削除中..."
+  for AP_ID in $(echo "$AP_IDS" | xargs); do # xargs で不要な空白を除去しつつループ
+  log "INFO" " - アクセスポイント '$AP_ID' を削除中..."
+  # 削除コマンドの実行。失敗しても続行
+  aws efs delete-access-point \
+   --region "$REGION" \
+   --access-point-id "$AP_ID" 2>&1 | while read -r line; do log "INFO" "delete-access-point ($AP_ID): $line"; done || log "WARN" "アクセスポイント '$AP_ID' の削除コマンド発行に失敗しました。" >&2
+  done
+  # アクセスポイントの削除待機はEFS APIには存在しないため、ここでは待機しません。
+  # マウントターゲット削除待ちの間に終わることを期待します。
+ else
+  log "INFO" "EFS '$FILE_SYSTEM_ID' に関連付けられたアクセスポイントは見つかりませんでした。"
+ fi
+
 
  # --- Delete Mount Targets ---
  # マウントターゲットを列挙
@@ -740,7 +885,7 @@ case "$ACTION" in
  wait_for_efs_deleted "$FILE_SYSTEM_ID" "$REGION" || {
   # wait_for_efs_deleted 内部でエラーログは出力済み
   log "ERROR" "EFSファイルシステム '$FILE_SYSTEM_ID' の削除完了待機に失敗しました。" >&2
-  continue # 次のCSV行へスキップ
+  continue # 次のCSV行へスキスキップ
  }
 
  log "INFO" "--- EFS '$EFS_NAME' (ID: $FILE_SYSTEM_ID, リージョン: $REGION) の削除完了 ---"

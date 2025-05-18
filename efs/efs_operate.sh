@@ -170,7 +170,7 @@ while [ $retry_count -lt $max_retries ]; do
  fi
 
 
- # Case 1: AWS CLIコマンドが失敗した、またはエラー出力を返した
+ # Case 1: AWS CLIコマンドが失敗した、またはエラー出力を返した場合
  if [ $exit_code -ne 0 ] || [ -n "$error_output" ]; then
    # NotFoundException はファイルシステムが存在しない（待機終了）ことを意味する
    if echo "$error_output" | grep -q 'NotFoundException\|FileSystemNotFound'; then
@@ -191,7 +191,7 @@ while [ $retry_count -lt $max_retries ]; do
 
  # Case 3: AWS CLIコマンドは成功したが、ステータスが空、"None"、またはその他の予期しない状態
  if [ -z "$status" ] || [ "$status" == "None" ] || ([ "$status" != "creating" ] && [ "$status" != "available" ]); then
-   # 状態が空、None、または creating/available 以外の予期しない状態の場合警告
+   # 態が空、None、または creating/available 以外の予期しない状態の場合警告
    log "WARN" "EFS '$fs_id' の状態取得で予期しない結果 '${status:-unknown}' が返されました (終了コード: $exit_code)。現在の状態: $status。リトライします。" >&2
  fi
 
@@ -398,7 +398,6 @@ if [ "${#fields[@]}" -ne "$expected_fields" ]; then
 fi
 
 # 配列から各変数に割り当て (配列インデックスは0から始まる)
-# ここでは local は不要。whileループのサブシェル内で一時的な変数となる。
 ACTION_RAW="${fields[0]:-}"
 REGION_CSV="${fields[1]:-}"
 EFS_NAME_RAW="${fields[2]:-}"
@@ -417,7 +416,6 @@ ACCESS_POINTS_STR_RAW="${fields[14]:-}" # インデックスが1つずれた
 
 
 # 各変数の前後の空白文字をトリム (sed 関数を使用)
-# ここでも local は不要。
 ACTION=$(trim_whitespace "$ACTION_RAW")
 REGION=$(trim_whitespace "$REGION_CSV")
 EFS_NAME=$(trim_whitespace "$EFS_NAME_RAW")
@@ -481,13 +479,11 @@ case "$ACTION" in
  # 0: 見つかった (IDをecho)
  # 1: 見つからなかった (INFOログがstderr)
  # 2: AWS CLIエラー (エラーログがstderr)
- # ここでは local は不要
  check_result=$(get_efs_id_by_name "$REGION" "$EFS_NAME") # ID or Nothing or Error Output from stderr
  check_exit_code=$?
 
  if [ $check_exit_code -eq 0 ]; then
   # 終了コード0: EFSが見つかった
-  # ここでも local は不要
   existing_efs_id="$check_result" # get_efs_id_by_nameがstdoutにechoしたIDを取得
   log "WARN" "EFSファイルシステム '$EFS_NAME' (リージョン $REGION) は既に存在します (ID: $existing_efs_id)。作成をスキップします。"
   continue # 次のCSV行へスキップ (作成不要のため)
@@ -506,10 +502,51 @@ case "$ACTION" in
  # --- EFSファイルシステムの作成コマンド構築 ---
  log "INFO" "EFSファイルシステム '$EFS_NAME' の作成コマンドを構築中..."
 
+ # すべてのタグ（Nameタグ含む）を Key=Value 形式の文字列として保持する配列
+ ALL_TAG_KEY_VALUE_PAIRS=()
+
+ # Nameタグを最初に追加 (これは必須かつ特別なタグと見なす)
+ # 値にスペースが含まれる可能性を考慮し、Value部分はダブルクォートで囲み、内部のダブルクォートはエスケープする
+ ALL_TAG_KEY_VALUE_PAIRS+=("Key=Name,Value=\"$EFS_NAME\"")
+
+
+ # 追加のタグを処理して ALL_TAG_KEY_VALUE_PAIRS に追加
+ if [ -n "$TAGS_STR" ]; then
+  log "INFO" "追加のタグを処理中: '$TAGS_STR'"
+  IFS=';' read -r -a tags_array <<< "$TAGS_STR"
+  for tag_pair in "${tags_array[@]}"; do
+   trimmed_tag_pair=$(trim_whitespace "$tag_pair")
+   if [ -n "$trimmed_tag_pair" ]; then
+    if [[ "$trimmed_tag_pair" == *'='* ]]; then
+     tag_key_raw="${trimmed_tag_pair%%=*}"
+     tag_value_raw="${trimmed_tag_pair#*=}"
+
+     # 分割後のキーと値を個別にトリム (前回の修正で追加した部分)
+     tag_key=$(trim_whitespace "$tag_key_raw")
+     tag_value=$(trim_whitespace "$tag_value_raw")
+
+     if [ -n "$tag_key" ] && [ -n "$tag_value" ]; then
+      # AWS CLIに渡すための Key=key,Value=value 形式の文字列を構築
+      # 値にスペースが含まれる可能性を考慮し、Value部分はダブルクォートで囲み、内部のダブルクォートはエスケープする
+      # 配列に追加する文字列は、後で "${ALL_TAG_KEY_VALUE_PAIRS[@]}" で展開される際に
+      # 各要素がスペース区切りの引数としてawsコマンドに渡される
+      ALL_TAG_KEY_VALUE_PAIRS+=("Key=$tag_key,Value=\"$tag_value\"") # <-- この形式の文字列を配列に追加
+     else
+      log "WARN" "不正なタグのKeyまたはValueが検出されました。スキップします: '$trimmed_tag_pair' (Key='$tag_key', Value='$tag_value')" >&2
+     fi
+    else
+     log "WARN" "不正なタグフォーマットが検出されました ('Key=Value' 形式である必要があります)。スキップします: '$trimmed_tag_pair'" >&2
+    fi
+   fi
+  done
+ fi
+
+ # EFSファイルシステム作成コマンドの引数配列を構築
  CREATE_EFS_ARGS=(
   "efs" "create-file-system"
   "--region" "$REGION"
-  "--tags" "Key=Name,Value=\"$EFS_NAME\"" # Nameタグは必須として常に設定
+  # 単一の --tags パラメータに、すべてのタグ Key=Value 文字列をスペース区切りで渡す
+  "--tags" "${ALL_TAG_KEY_VALUE_PAIRS[@]}"
   "--performance-mode" "$PERFORMANCE_MODE"
   "--throughput-mode" "$THROUGHPUT_MODE"
   "--query" "FileSystemId"
@@ -520,47 +557,9 @@ case "$ACTION" in
  CREATE_EFS_ARGS+=("${PROVISIONED_THROUGHPUT_ARGS[@]}")
 
  # 暗号化フラグを追加
- if [[ "$ENCRYPTED" =~ ^[TtYy1] ]]; then # true, yes, Y, 1 (大文字小文字区別なし) で始まるかチェック
+ if [[ "$ENCRYPTED" =~ ^[TtYy1] ]]; then
   CREATE_EFS_ARGS+=("--encrypted")
  fi
-
- # 追加のタグを処理してCREATE_EFS_ARGSに追加
- ADDITIONAL_TAGS_ARGS=()
- if [ -n "$TAGS_STR" ]; then
-  log "INFO" "追加のタグを処理中: '$TAGS_STR'"
-  # セミコロンで分割
-  IFS=';' read -r -a tags_array <<< "$TAGS_STR"
-  for tag_pair in "${tags_array[@]}"; do
-  local trimmed_tag_pair=$(trim_whitespace "$tag_pair")
-  if [ -n "$trimmed_tag_pair" ]; then
-    # Key=Value 形式かチェックし、分割
-    if [[ "$trimmed_tag_pair" == *'='* ]]; then
-    # 最初の'='で分割
-    local tag_key="${trimmed_tag_pair%%=*}"
-    local tag_value="${trimmed_tag_pair#*=}"
-    # KeyとValueが空でないかチェック (Key=, =Value, = のような不正形式を防ぐ)
-    if [ -n "$tag_key" ] && [ -n "$tag_value" ]; then
-      ADDITIONAL_TAGS_ARGS+=("Key=$tag_key,Value=\"$tag_value\"")
-    else
-      log "WARN" "不正なタグのKeyまたはValueが検出されました。スキップします: '$trimmed_tag_pair'" >&2
-    fi
-    else
-    log "WARN" "不正なタグフォーマットが検出されました ('Key=Value' 形式である必要があります)。スキップします: '$trimmed_tag_pair'" >&2
-    fi
-  fi
-  done
- fi
-
- # ADDITIONAL_TAGS_ARGSがある場合のみ、--tags 引数として追加
- # `--tags` は複数回指定できるため、Nameタグの後に追加するのが最も簡単
- if [ "${#ADDITIONAL_TAGS_ARGS[@]}" -gt 0 ]; then
-  # 配列を展開して `--tags` 引数として追加
-  # 各要素は既に `Key=...,Value="..."` 形式になっている
-  for tag_arg in "${ADDITIONAL_TAGS_ARGS[@]}"; do
-    CREATE_EFS_ARGS+=("--tags" "$tag_arg")
-  done
- fi
-
 
  # --- EFSファイルシステムの作成実行 ---
  log "INFO" "AWS CLIコマンドを実行: aws ${CREATE_EFS_ARGS[*]}"
@@ -575,7 +574,6 @@ case "$ACTION" in
  fi
 
  # コマンドが成功した場合、$capture_output には FileSystemId が含まれているはず
- # ここでも local は不要
  FILE_SYSTEM_ID=$(trim_whitespace "$capture_output")
 
  # 念のため、成功したはずだが FileSystemId が空になっていないか最終チェック
@@ -756,7 +754,6 @@ case "$ACTION" in
 
  # EFSファイルシステムを検索 (Nameタグで検索)
  # 削除処理では見つからない場合はスキップ、AWSエラーの場合はエラーログしてスキップ
- # ここでは local は不要
  find_fs_id=$(get_efs_id_by_name "$REGION" "$EFS_NAME") # ID or Nothing (stderr)
  find_exit_code=$?
 
@@ -772,7 +769,6 @@ case "$ACTION" in
 
  # 終了コード0の場合、EFSが見つかった
  # find_fs_id には get_efs_id_by_name が stdout に echo した ID が入っているはず
- # ここでも local は不要
  FILE_SYSTEM_ID="$find_fs_id" # 見つかったIDを使用
 
  # IDが空ではないことを再確認 (念のため)
@@ -799,12 +795,11 @@ case "$ACTION" in
  if [ $describe_ap_exit_code -ne 0 ] || echo "$AP_IDS" | grep -q 'ERROR\|Exception'; then
   # ファイルシステムが既に削除されているNotFoundExceptionの場合はエラーとしない
   if ! echo "$AP_IDS" | grep -q 'FileSystemNotFound\|NotFoundException'; then
-  log "ERROR" "EFS '$FILE_SYSTEM_ID' のアクセスポイント列挙に失敗しました: $AP_IDS。マウントターゲットおよびファイルシステム削除をスキップします。" >&2
-  continue # 次のCSV行へスキップ
-  else
-  # ファイルシステムが見つからないエラーはアクセスポイントも当然ないとして処理を続行
   log "WARN" "EFSファイルシステム '$FILE_SYSTEM_ID' が見つかりませんでした（既に削除されている可能性）。アクセスポイントの削除は不要です。" >&2
   AP_IDS="" # アクセスポイントは無いと見なす
+  else
+  log "ERROR" "EFS '$FILE_SYSTEM_ID' のアクセスポイント列挙に失敗しました: $AP_IDS。マウントターゲットおよびファイルシステム削除をスキップします。" >&2
+  continue # 次のCSV行へスキップ
   fi
  fi
 
@@ -885,11 +880,11 @@ case "$ACTION" in
  wait_for_efs_deleted "$FILE_SYSTEM_ID" "$REGION" || {
   # wait_for_efs_deleted 内部でエラーログは出力済み
   log "ERROR" "EFSファイルシステム '$FILE_SYSTEM_ID' の削除完了待機に失敗しました。" >&2
-  continue # 次のCSV行へスキスキップ
+  continue # 次のCSV行へスキップ
  }
 
  log "INFO" "--- EFS '$EFS_NAME' (ID: $FILE_SYSTEM_ID, リージョン: $REGION) の削除完了 ---"
- ;; # remove アクションの終わり
+ ;; # add アクションの終わり
 
  *)
  # 無効なACTION

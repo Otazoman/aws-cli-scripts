@@ -1,3 +1,4 @@
-REGION,EFS_NAME,ENCRYPTED,PERFORMANCE_MODE,THROUGHPUT_MODE,LC_TRANSITION_IA_DAYS,LC_TRANSITION_ARCHIVE_DAYS,LC_TRANSITION_PRIMARY_ON_ACCESS,BACKUP_ENABLED,SUBNETS,SECURITY_GROUPS,ACCESS_POINTS
-ap-northeast-1,ap-test-efs,TRUE,generalPurpose,elastic,30,90,TRUE,TRUE,rds-test-subnet-private1-ap-northeast-1a;rds-test-subnet-private3-ap-northeast-1d;subnet-01403e869c8557e38,test-rds-sg;sg-040cbdf6d8b8c55d0;test-rds-sg,/site/wpcontents|wpcontents-ap;/site/efs|efs-site-ap;/efs-ap|efs-ap-point
-us-east-1,us-test-efs,FALSE,generalPurpose,bursting,,,FALSE,FALSE,test-lb-subnet-private1-us-east-1a,sg-0a4f1101e5fe9a5da,/|root-ap
+ACTION,REGION,EFS_NAME,ENCRYPTED,PERFORMANCE_MODE,THROUGHPUT_MODE,PROVISIONED_THROUGHPUT_MIBPS,LC_TRANSITION_IA_DAYS,LC_TRANSITION_ARCHIVE_DAYS,LC_TRANSITION_PRIMARY_ON_ACCESS,BACKUP_ENABLED,SUBNETS,SECURITY_GROUPS,ACCESS_POINTS
+add,ap-northeast-1,ap-test-efs,TRUE,generalPurpose,elastic,,30,90,TRUE,TRUE,rds-test-subnet-private1-ap-northeast-1a;rds-test-subnet-private3-ap-northeast-1d;subnet-01403e869c8557e38,test-rds-sg;sg-040cbdf6d8b8c55d0;test-rds-sg,/site/wpcontents|wpcontents-ap;/site/efs|efs-site-ap;/efs-ap|efs-ap-point
+add,us-east-1,us-test-efs,FALSE,generalPurpose,bursting,,,,FALSE,FALSE,test-lb-subnet-private1-us-east-1a,sg-0a4f1101e5fe9a5da,/|root-ap
+add,ap-northeast-1,prov-example-efs,TRUE,generalPurpose,provisioned,20,30,,TRUE,TRUE,rds-test-subnet-private1-ap-northeast-1a;rds-test-subnet-private3-ap-northeast-1d,test-rds-sg,/data|data-ap;/logs|logs-ap

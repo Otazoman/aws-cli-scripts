@@ -105,16 +105,6 @@ update_rds_instance() {
     if [ -n "$ALLOCATED_STORAGE" ]; then CMD+=("--allocated-storage" "$ALLOCATED_STORAGE"); params_added=1; fi
     if [ -n "$MAX_ALLOCATED_STORAGE" ]; then CMD+=("--max-allocated-storage" "$MAX_ALLOCATED_STORAGE"); params_added=1; fi
 
-    # Secrets Manager/パスワード更新
-    if [ "$(echo "$MANAGE_MASTER_PASSWORD"  | tr -d '\r' | xargs | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
-        CMD+=("--manage-master-user-password")
-        params_added=1
-    elif  [ "$(echo "$MANAGE_MASTER_PASSWORD"  | tr -d '\r' | xargs | tr '[:lower:]' '[:upper:]')" != "TRUE" ] && [ -n "$MASTER_USERNAME" ] && [ -n "$MASTER_PASSWORD" ]; then
-        CMD+=("--no-manage-master-user-password")
-        CMD+=("--master-user-password" "$MASTER_PASSWORD")
-        params_added=1
-    fi
-
     # Security Group IDリストを結合して追加
     if [ "${#SECURITY_GROUP_IDS[@]}" -gt 0 ]; then
         CMD+=("--vpc-security-group-ids" "${SECURITY_GROUP_IDS[@]}")
@@ -400,34 +390,17 @@ create_rds_instance() {
             fi
         fi
         # 認証情報の設定 (Secrets Manager 優先)
-
-        # if [ -n "$MANAGE_MASTER_PASSWORD" ]; then
-        #     log "${DB_IDENTIFIER}: Secrets Manager ARN を使用して認証情報を設定します."
-        #     CMD+=("--master-user-secret-arn" "$SECRET_MANAGER_ARN")
-        # elif [ -n "$MASTER_USERNAME" ] && [ -n "$MASTER_PASSWORD" ]; then
-        #     log "${DB_IDENTIFIER}: マスターユーザー名とパスワードを使用して認証情報を設定します."
-        #     CMD+=("--master-username" "$MASTER_USERNAME")
-        #     CMD+=("--master-user-password" "$MASTER_PASSWORD")
-        # else
-        #     log "エラー: 新規作成には Secrets Manager ARN または マスターユーザー名/マスターパスワード ペアのどちらかが必要です."
-        #     return 1
-        # fi
-
-        if [ "$(echo "$MANAGE_MASTER_PASSWORD" | tr -d '\r' | xargs | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
-            log "${DB_IDENTIFIER}: Secrets Manager を使用して認証情報を設定します。"
-            CMD+=("--master-username" "$MASTER_USERNAME")
-            CMD+=("--manage-master-user-password")
-        elif  [ "$(echo "$MANAGE_MASTER_PASSWORD" | tr -d '\r' | xargs | tr '[:lower:]' '[:upper:]')" != "TRUE" ] && [ -n "$MASTER_USERNAME" ] && [ -n "$MASTER_PASSWORD" ]; then
-            log "${DB_IDENTIFIER}: マスターユーザー名とパスワードを使用して認証情報を設定します。"
+        if [ -n "$SECRET_MANAGER_ARN" ]; then
+            log "${DB_IDENTIFIER}: Secrets Manager ARN を使用して認証情報を設定します."
+            CMD+=("--master-user-secret-arn" "$SECRET_MANAGER_ARN")
+        elif [ -n "$MASTER_USERNAME" ] && [ -n "$MASTER_PASSWORD" ]; then
+            log "${DB_IDENTIFIER}: マスターユーザー名とパスワードを使用して認証情報を設定します."
             CMD+=("--master-username" "$MASTER_USERNAME")
             CMD+=("--master-user-password" "$MASTER_PASSWORD")
         else
-            log "エラー: 新規作成には MANAGE_MASTER_PASSWORD または マスターユーザー名/マスターパスワード ペアのどちらかが必要です。"
+            log "エラー: 新規作成には Secrets Manager ARN または マスターユーザー名/マスターパスワード ペアのどちらかが必要です."
             return 1
         fi
-
-
-
         # タグ
         if [ "${#TAG_CMD_PART[@]}" -gt 0 ]; then
             CMD+=("${TAG_CMD_PART[@]}")
@@ -477,7 +450,7 @@ main() {
 
     # CSVファイルの内容を読み込んで処理
     # DELETION_PROTECTION カラムを追加
-    while IFS=, read -r REGION DB_IDENTIFIER ENGINE ENGINE_VERSION INSTANCE_CLASS STORAGE_TYPE ALLOCATED_STORAGE MAX_ALLOCATED_STORAGE DB_NAME MASTER_USERNAME MASTER_PASSWORD VPC_SG_IDS SUBNET_GROUP PARAM_GROUP OPT_GROUP PUBLIC_ACCESS ENABLE_PERFORMANCE_INSIGHTS BACKUP_RETENTION BACKUP_WINDOW MAINTENANCE_WINDOW PERFORMANCE_RETENTION TAGS MULTI_AZ LOG_EXPORTS SNAPSHOT_IDENTIFIER SOURCE_DB_IDENTIFIER MANAGE_MASTER_PASSWORD DELETION_PROTECTION; do
+    while IFS=, read -r REGION DB_IDENTIFIER ENGINE ENGINE_VERSION INSTANCE_CLASS STORAGE_TYPE ALLOCATED_STORAGE MAX_ALLOCATED_STORAGE DB_NAME MASTER_USERNAME MASTER_PASSWORD VPC_SG_IDS SUBNET_GROUP PARAM_GROUP OPT_GROUP PUBLIC_ACCESS ENABLE_PERFORMANCE_INSIGHTS BACKUP_RETENTION BACKUP_WINDOW MAINTENANCE_WINDOW PERFORMANCE_RETENTION TAGS MULTI_AZ LOG_EXPORTS SNAPSHOT_IDENTIFIER SOURCE_DB_IDENTIFIER SECRET_MANAGER_ARN DELETION_PROTECTION; do
         # ヘッダー行と空行をスキップ
         if [ "$(echo "$REGION" | xargs)" = "REGION" ]; then continue; fi
         if [ -z "$(echo "$REGION" | xargs)" ] && [ -z "$(echo "$DB_IDENTIFIER" | xargs)" ]; then continue; fi
@@ -511,7 +484,7 @@ main() {
         LOG_EXPORTS=$(echo "$LOG_EXPORTS" | xargs)
         SNAPSHOT_IDENTIFIER=$(echo "$SNAPSHOT_IDENTIFIER" | xargs)
         SOURCE_DB_IDENTIFIER=$(echo "$SOURCE_DB_IDENTIFIER" | xargs)
-        MANAGE_MASTER_PASSWORD=$(echo "$MANAGE_MASTER_PASSWORD" | xargs)
+        SECRET_MANAGER_ARN=$(echo "$SECRET_MANAGER_ARN" | xargs)
         DELETION_PROTECTION=$(echo "$DELETION_PROTECTION" | tr -d '\r' | xargs)
 
 
@@ -530,7 +503,7 @@ main() {
         # 新規作成時の必須パラメータ検証
         if [ -z "$SNAPSHOT_IDENTIFIER" ] && [ -z "$SOURCE_DB_IDENTIFIER" ]; then
              # 認証情報検証
-             if [ -z "$MANAGE_MASTER_PASSWORD" ] && ( [ -z "$MASTER_USERNAME" ] || [ -z "$MASTER_PASSWORD" ] ); then
+             if [ -z "$SECRET_MANAGER_ARN" ] && ( [ -z "$MASTER_USERNAME" ] || [ -z "$MASTER_PASSWORD" ] ); then
                  log "エラー: ${DB_IDENTIFIER} 設定行で新規作成のための Secrets Manager ARN または マスターユーザー名/マスターパスワード ペアが指定されていません. この行はスキップします."
                  continue
              fi

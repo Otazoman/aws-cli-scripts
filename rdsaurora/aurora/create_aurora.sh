@@ -175,9 +175,13 @@ update_aurora_cluster() {
         params_added=1
     fi
 
-    # Secrets Manager ARNへの更新
-    if [ -n "$SECRET_MANAGER_ARN" ]; then
-        CMD+=("--master-user-secret-arn" "$SECRET_MANAGER_ARN")
+    # Secrets Manager/パスワード更新
+    if [ "$(echo "$MANAGE_MASTER_PASSWORD"  | tr -d '\r' | xargs | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
+        CMD+=("--manage-master-user-password")
+        params_added=1
+    elif  [ "$(echo "$MANAGE_MASTER_PASSWORD"  | tr -d '\r' | xargs | tr '[:lower:]' '[:upper:]')" != "TRUE" ] && [ -n "$MASTER_USERNAME" ] && [ -n "$MASTER_PASSWORD" ]; then
+        CMD+=("--no-manage-master-user-password")
+        CMD+=("--master-user-password" "$MASTER_PASSWORD")
         params_added=1
     fi
 
@@ -310,15 +314,16 @@ create_aurora_cluster() {
             "--no-cli-pager"
         )
         # 認証情報の設定 (Secrets Manager 優先)
-        if [ -n "$SECRET_MANAGER_ARN" ]; then
-            log "${DB_IDENTIFIER}: Secrets Manager ARN を使用して認証情報を設定します。"
-            CMD+=("--master-user-secret-arn" "$SECRET_MANAGER_ARN")
-        elif [ -n "$MASTER_USERNAME" ] && [ -n "$MASTER_PASSWORD" ]; then
+        if [ "$(echo "$MANAGE_MASTER_PASSWORD" | tr -d '\r' | xargs | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
+            log "${DB_IDENTIFIER}: Secrets Manager を使用して認証情報を設定します。"
+            CMD+=("--master-username" "$MASTER_USERNAME")
+            CMD+=("--manage-master-user-password")
+        elif  [ "$(echo "$MANAGE_MASTER_PASSWORD" | tr -d '\r' | xargs | tr '[:lower:]' '[:upper:]')" != "TRUE" ] && [ -n "$MASTER_USERNAME" ] && [ -n "$MASTER_PASSWORD" ]; then
             log "${DB_IDENTIFIER}: マスターユーザー名とパスワードを使用して認証情報を設定します。"
             CMD+=("--master-username" "$MASTER_USERNAME")
             CMD+=("--master-user-password" "$MASTER_PASSWORD")
         else
-            log "エラー: 新規作成には Secrets Manager ARN または マスターユーザー名/マスターパスワード ペアのどちらかが必要です。"
+            log "エラー: 新規作成には MANAGE_MASTER_PASSWORD または マスターユーザー名/マスターパスワード ペアのどちらかが必要です。"
             return 1
         fi
 
@@ -664,7 +669,7 @@ main() {
     # IFS=, で区切り文字をカンマに設定
     # read -r でバックスラッシュをそのまま読み込む
     # 各カラムを適切な変数に割り当て
-    while IFS=, read -r REGION DB_IDENTIFIER ENGINE ENGINE_VERSION DB_INSTANCE_CLASS CLUSTER_PARAMETER_GROUP INSTANCE_PARAMETER_GROUP SECURITY_GROUPS DB_SUBNET_GROUP MASTER_USERNAME MASTER_PASSWORD DB_NAME BACKUP_RETENTION PREFERRED_BACKUP_WINDOW PREFERRED_MAINTENANCE_WINDOW IAM_AUTH CLOUDWATCH_LOGS_EXPORTS DELETION_PROTECTION PUBLICLY_ACCESSIBLE ENABLE_PERFORMANCE_INSIGHTS PERFORMANCE_INSIGHTS_RETENTION AURORA_INSTANCE_COUNT TAGS SNAPSHOT_IDENTIFIER SOURCE_DB_IDENTIFIER AURORA_STORAGE_TYPE SECRET_MANAGER_ARN; do
+    while IFS=, read -r REGION DB_IDENTIFIER ENGINE ENGINE_VERSION DB_INSTANCE_CLASS CLUSTER_PARAMETER_GROUP INSTANCE_PARAMETER_GROUP SECURITY_GROUPS DB_SUBNET_GROUP MASTER_USERNAME MASTER_PASSWORD DB_NAME BACKUP_RETENTION PREFERRED_BACKUP_WINDOW PREFERRED_MAINTENANCE_WINDOW IAM_AUTH CLOUDWATCH_LOGS_EXPORTS DELETION_PROTECTION PUBLICLY_ACCESSIBLE ENABLE_PERFORMANCE_INSIGHTS PERFORMANCE_INSIGHTS_RETENTION AURORA_INSTANCE_COUNT TAGS SNAPSHOT_IDENTIFIER SOURCE_DB_IDENTIFIER AURORA_STORAGE_TYPE MANAGE_MASTER_PASSWORD; do
         # ヘッダー行と空行をスキップ
         if [ "$(echo "$REGION" | xargs)" = "REGION" ]; then continue; fi
         if [ -z "$(echo "$REGION" | xargs)" ] && [ -z "$(echo "$DB_IDENTIFIER" | xargs)" ]; then continue; fi
@@ -698,7 +703,7 @@ main() {
         SNAPSHOT_IDENTIFIER=$(echo "$SNAPSHOT_IDENTIFIER" | xargs)
         SOURCE_DB_IDENTIFIER=$(echo "$SOURCE_DB_IDENTIFIER" | xargs)
         AURORA_STORAGE_TYPE=$(echo "$AURORA_STORAGE_TYPE" | xargs)
-        SECRET_MANAGER_ARN=$(echo "$SECRET_MANAGER_ARN" | xargs)
+        MANAGE_MASTER_PASSWORD=$(echo "$MANAGE_MASTER_PASSWORD" | xargs)
 
 
         # 必須項目チェック
@@ -709,15 +714,15 @@ main() {
 
         # 復元タイプと新規作成の組み合わせチェック
         if [ -n "$SNAPSHOT_IDENTIFIER" ] && [ -n "$SOURCE_DB_IDENTIFIER" ]; then
-             log "エラー: ${DB_IDENTIFIER} 設定行で SNAPSHOT_IDENTIFIER と SOURCE_DB_IDENTIFIER の両方が指定されています。どちらか一方のみを指定してください。この行はスキップします。"
+             log "エラー: ${DB_IDENTIFIER} 設定行で SNAPSHOT_IDENTIFIER と SOURCE_DB_IDENTIFIER の両方が指定されています。どちらか一方のみを指定してください。この行はスキップします 。"
              continue
         fi
 
         # 新規作成時の必須パラメータ検証
         if [ -z "$SNAPSHOT_IDENTIFIER" ] && [ -z "$SOURCE_DB_IDENTIFIER" ]; then
              # 認証情報検証
-             if [ -z "$SECRET_MANAGER_ARN" ] && ( [ -z "$MASTER_USERNAME" ] || [ -z "$MASTER_PASSWORD" ] ); then
-                  log "エラー: ${DB_IDENTIFIER} 設定行で新規作成のための Secrets Manager ARN または マスターユーザー名/マスターパスワード ペアが指定されていません。この行はスキップします。"
+             if [ -z "$MANAGE_MASTER_PASSWORD" ] && ( [ -z "$MASTER_USERNAME" ] || [ -z "$MASTER_PASSWORD" ] ); then
+                  log "エラー: ${DB_IDENTIFIER} 設定行で新規作成のための Secrets Manager または マスターユーザー名/マスターパスワード ペアが指定されていません。この行はスキップ します。"
                   continue
              fi
              # DB Subnet Groupが必須

@@ -1,0 +1,4 @@
+NAME,VALUE,TYPE,TAGS
+/test/db/MASTER_MYSQL_USER,myuser123,String,Environment=uat3;Service=db
+/test/db/MASTER_MYSQL_PASSWORD,mypasswordabc!@#,SecureString,Environment=uat3;Service=db
+/common/list/example,item1; item2; item3,StringList,Service=common

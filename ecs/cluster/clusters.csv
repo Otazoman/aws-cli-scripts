@@ -1,0 +1,5 @@
+REGION,ACTION,CLUSTERNAME,TAGS
+ap-northeast-1,add,my-prod-cluster,Environment=Production;Owner=TeamA;Project=WebApp
+us-east-1,add,my-dev-cluster,Environment=Development;Owner=TeamB
+ap-northeast-1,add,old-test-cluster,
+us-east-1,add,another-cluster,Environment=Staging

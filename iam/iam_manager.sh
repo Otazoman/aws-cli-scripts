@@ -270,7 +270,7 @@ echo "使用するCSVファイル: $CSV_FILE"
                 fi
 
                 # ロールをデタッチ
-                for role in $(aws iam list-instance-profiles-for-role --role-name $RESOURCE_NAME --query 'InstanceProfiles[].InstanceProfileName' --output text); do
+                for role in $(aws iam list-instance-profiles-for-role --role-name $ATTACH_TO --query 'InstanceProfiles[].InstanceProfileName' --output text); do
                     aws iam remove-role-from-instance-profile \
                         --instance-profile-name $RESOURCE_NAME \
                         --role-name $role \

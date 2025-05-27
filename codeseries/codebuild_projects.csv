@@ -1,0 +1,4 @@
+ACTION,PROJECT_NAME,SOURCE_TYPE,SOURCE_LOCATION,IMAGE,COMPUTE_TYPE,ENVIRONMENT_TYPE,SERVICE_ROLE_NAME,BUILDSPEC,ARTIFACTS_TYPE,ARTIFACTS_LOCATION,AWS_REGION
+add,MY-FIRST-CODEBUILD-PROJECT,S3,your-s3-bucket/source.zip,aws/codebuild/standard:5.0,BUILD_GENERAL1_SMALL,LINUX_CONTAINER,CodeBuildServiceRole,buildspec.yml,NO_ARTIFACTS,,ap-northeast-1
+add,MY-SECOND-CODEBUILD-PROJECT,GITHUB,https://github.com/Otazoman/aws-cli-scripts.git,aws/codebuild/standard:5.0,BUILD_GENERAL1_MEDIUM,LINUX_CONTAINER,AnotherCodeBuildRole,buildspec.yml,S3,my-unique-codebuild-artifacts-bucket,ap-northeast-1
+add,MY-THIRD-CODEBUILD-PROJECT,GITHUB,https://github.com/Otazoman/aws-cli-scripts.git,aws/codebuild/standard:5.0,BUILD_GENERAL1_SMALL,LINUX_CONTAINER,AnotherCodeBuildRole,buildspec.yml,S3,my-add-artifacts-bucket,us-east-1

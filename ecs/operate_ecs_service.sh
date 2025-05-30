@@ -54,19 +54,31 @@ get_resource_id() {
 }
 
 # サービスの存在確認 (ステータスに関わらず、サービス定義自体が存在するか)
+# 戻り値: 0 (存在する), 1 (存在しない)
 check_service_definition_exists() {
     local region="$1"
     local cluster_name="$2"
     local service_name="$3"
-    aws ecs describe-services --region "$region" --cluster "$cluster_name" --services "$service_name" --query 'services[0].serviceArn' --output text --no-cli-pager 2>/dev/null | grep -q "arn:aws:ecs:"
+    local service_arn=$(aws ecs describe-services --region "$region" --cluster "$cluster_name" --services "$service_name" --query 'services[0].serviceArn' --output text --no-cli-pager 2>/dev/null)
+    if [[ -n "$service_arn" && "$service_arn" != "None" ]]; then
+        return 0 # サービス定義が存在する
+    else
+        return 1 # サービス定義が存在しない
+    fi
 }
 
 # サービスの現在の状態を取得する関数
+# 戻り値: ACTIVE, DRAINING, INACTIVE など、または空文字列（サービスが見つからない場合）
 get_service_status() {
     local region="$1"
     local cluster_name="$2"
     local service_name="$3"
-    aws ecs describe-services --region "$region" --cluster "$cluster_name" --services "$service_name" --query 'services[0].status' --output text --no-cli-pager 2>/dev/null
+    local status=$(aws ecs describe-services --region "$region" --cluster "$cluster_name" --services "$service_name" --query 'services[0].status' --output text --no-cli-pager 2>/dev/null)
+    if [[ "$status" == "None" ]]; then
+        echo "" # サービスが見つからない場合は空文字列を返す
+    else
+        echo "$status"
+    fi
 }
 
 # サービスがACTIVEになるまで待機する関数
@@ -74,29 +86,78 @@ wait_for_service_active() {
     local region="$1"
     local cluster_name="$2"
     local service_name="$3"
-    local max_attempts=10
-    local attempt=1
+    local max_attempts=30 # 以前の10回から増やしました
     local delay=10 # seconds
 
     echo "サービス ${service_name} が ACTIVE 状態になるのを待機中..."
 
-    while [ $attempt -le $max_attempts ]; do
+    for ((attempt=1; attempt<=max_attempts; attempt++)); do
         current_status=$(get_service_status "$region" "$cluster_name" "$service_name")
         if [ "$current_status" == "ACTIVE" ]; then
             echo "サービス ${service_name} は ACTIVE 状態になりました。"
             return 0
-        elif [ -z "$current_status" ] || [ "$current_status" == "None" ]; then
-            echo "サービス ${service_name} が見つかりません。作成処理に進みます。"
+        elif [ -z "$current_status" ]; then
+            echo "サービス ${service_name} が見つかりません。これは、作成処理に進む場合に正常な状態です。"
             return 0 # サービスが存在しない場合も、create-serviceに進むために成功として返す
         else
             echo "サービス ${service_name} は現在 ${current_status} 状態です。${delay}秒後に再試行します (試行 ${attempt}/${max_attempts})..."
             sleep "$delay"
         fi
-        attempt=$((attempt + 1))
     done
 
     echo "エラー: サービス ${service_name} がタイムアウト (${max_attempts}回の試行) しても ACTIVE 状態になりませんでした。" >&2
     return 1
+}
+
+# 既存のDRAINING状態のサービスを強制削除する関数
+force_delete_draining_service() {
+    local region="$1"
+    local cluster_name="$2"
+    local service_name="$3"
+
+    echo "警告: サービス ${service_name} が DRAINING 状態のため、強制的に削除を試みます。"
+
+    # まずdesired-countを0に設定してタスクを停止させる
+    echo "--- サービス ${service_name} のdesired-countを0に設定中 ---"
+    set +e # コマンド失敗時にスクリプトを終了させない
+    aws ecs update-service \
+        --region "$region" \
+        --no-cli-pager \
+        --cluster "$cluster_name" \
+        --service "$service_name" \
+        --desired-count 0 2>/dev/null
+    local update_status=$?
+    set -e
+    if [[ $update_status -ne 0 ]]; then
+        echo "警告: サービス ${service_name} のdesired-countを0に設定中にエラーが発生しました。（続行します）"
+    fi
+
+    # タスクが停止するまで待機 (最大60秒)
+    echo "サービス ${service_name} のタスクが停止するまで最大60秒待機中..."
+    for i in {1..6}; do # 10秒ごとに6回チェック
+        local current_running_tasks=$(aws ecs describe-services --region "$region" --cluster "$cluster_name" --services "$service_name" --query 'services[0].runningCount' --output text --no-cli-pager 2>/dev/null || echo "ERROR")
+        if [[ "$current_running_tasks" == "0" || "$current_running_tasks" == "None" || "$current_running_tasks" == "ERROR" ]]; then
+            echo "サービス ${service_name} のタスクは停止しました。"
+            break
+        fi
+        sleep 10
+    done
+
+    echo "--- サービス ${service_name} を強制削除中 ---"
+    set +e # コマンド失敗時にスクリプトを終了させない
+    aws ecs delete-service \
+        --region "$region" \
+        --no-cli-pager \
+        --cluster "$cluster_name" \
+        --service "$service_name" --force 2>/dev/null
+    local delete_status=$?
+    set -e
+    if [[ $delete_status -ne 0 ]]; then
+        echo "エラー: サービス ${service_name} の強制削除中にエラーが発生しました。このサービスはスキップします。" >&2
+        return 1
+    fi
+    echo "サービス ${service_name} を正常に強制削除しました。"
+    return 0
 }
 
 
@@ -107,8 +168,8 @@ wait_for_service_active() {
 # 引数4: サービス名
 # 引数5: 起動タイプ
 # 引数6: 希望するタスク数
-# 引数7: サブネット入力
-# 引数8: セキュリティグループ入力
+# 引数7: サブネット入力 (セミコロン区切り)
+# 引数8: セキュリティグループ入力 (セミコロン区切り)
 # 引数9: パブリックIP割り当て
 # 引数10: ターゲットグループ入力
 # 引数11: コンテナ名
@@ -116,10 +177,11 @@ wait_for_service_active() {
 # 引数13: ヘルスチェック猶予期間
 # 引数14: 最小キャパシティ
 # 引数15: 最大キャパシティ
-# 引数16: ターゲット値
-# 引数17: スケールアウトクールダウン
-# 引数18: スケールインクールダウン
-# 引数19: タグ文字列
+# 引数16: ターゲット値 (CPU使用率など)
+# 引数17: スケールアウトクールダウン (秒)
+# 引数18: スケールインクールダウン (秒)
+# 引数19: タグ文字列 (セミコロン区切り Key:Value)
+# 引数20: デプロイコントローラータイプ (ECS or CODE_DEPLOY)
 create_or_update_service() {
     local REGION="$1"
     local CLUSTER_NAME="$2"
@@ -140,6 +202,7 @@ create_or_update_service() {
     local OUT_COOLDOWN="${17}"
     local IN_COOLDOWN="${18}"
     local TAGS_STR="${19}"
+    local DEPLOYMENT_CONTROLLER="${20}" # 新しい引数
 
     local SERVICE_DEFINITION_EXISTS=false
     if check_service_definition_exists "$REGION" "$CLUSTER_NAME" "$SERVICE_NAME"; then
@@ -162,7 +225,7 @@ create_or_update_service() {
             --no-cli-pager \
             --cluster \"$CLUSTER_NAME\" \
             --service \"$SERVICE_NAME\""
-        
+            
         if [[ -n "$TASK_DEFINITION_NAME" ]]; then
             UPDATE_SERVICE_CMD+=" --task-definition \"$TASK_DEFINITION_NAME\""
         fi
@@ -172,6 +235,7 @@ create_or_update_service() {
         if [[ -n "$HEALTH_CHECK_PERIOD" ]]; then
             UPDATE_SERVICE_CMD+=" --health-check-grace-period-seconds \"$HEALTH_CHECK_PERIOD\""
         fi
+        # デプロイコントローラーはcreate-serviceでしか指定できないため、updateでは除外
         
         echo "$UPDATE_SERVICE_CMD"
         set +e # コマンド失敗時にスクリプトを終了させない
@@ -186,7 +250,24 @@ create_or_update_service() {
         echo "サービス ${SERVICE_NAME} を正常に更新しました。"
     else
         echo "サービス ${SERVICE_NAME} の定義はリージョン ${REGION} に存在しません。新規作成を試みます。"
-        # 新規サービス作成
+
+        # 新規作成前に、同じ名前のサービスがDRAINING状態でないか確認し、あれば強制削除
+        local current_service_status=$(get_service_status "$REGION" "$CLUSTER_NAME" "$SERVICE_NAME")
+        if [[ "$current_service_status" == "DRAINING" ]]; then
+            echo "警告: サービス ${SERVICE_NAME} は現在 DRAINING 状態です。強制的に削除して再作成します。"
+            if ! force_delete_draining_service "$REGION" "$CLUSTER_NAME" "$SERVICE_NAME"; then
+                echo "エラー: DRAINING状態のサービス ${SERVICE_NAME} の強制削除に失敗しました。新規作成をスキップします。" >&2
+                return 1
+            fi
+            # 削除後、完全に消滅するまで少し待つ
+            sleep 5
+            # 再度存在しないことを確認 (念のため)
+            if check_service_definition_exists "$REGION" "$CLUSTER_NAME" "$SERVICE_NAME"; then
+                echo "エラー: サービス ${SERVICE_NAME} が削除後もまだ存在します。新規作成をスキップします。" >&2
+                return 1
+            fi
+        fi
+
         # サブネットIDの解決
         local SUBNET_IDS_ARRAY=()
         IFS=';' read -r -a ADDR <<< "$SUBNETS_INPUT"
@@ -265,7 +346,12 @@ create_or_update_service() {
             --network-configuration \"$NETWORK_CONF\" \
             --load-balancers '${LOADBALANCERS}' \
             --health-check-grace-period-seconds \"$HEALTH_CHECK_PERIOD\""
-        
+
+        # デプロイコントローラーの指定
+        if [[ -n "$DEPLOYMENT_CONTROLLER" ]]; then
+            CREATE_SERVICE_CMD+=" --deployment-controller type=${DEPLOYMENT_CONTROLLER}"
+        fi
+            
         if [[ -n "$TAGS_CLI_ARG" ]]; then
             CREATE_SERVICE_CMD+=" $TAGS_CLI_ARG"
         fi
@@ -380,6 +466,7 @@ tail -n +2 "$CSV_FILE" | while IFS=',' read -r \
     OUT_COOLDOWN \
     IN_COOLDOWN \
     TAGS_STR \
+    DEPLOYMENT_CONTROLLER \
     _unused # 余分な列を吸収するためのダミー変数
 do
     # 空行のスキップ (末尾に空行がある場合など)
@@ -393,11 +480,12 @@ do
     case "$ACTION" in
         "add")
             # 存在しない場合は新規作成、存在するなら更新 (upsert ロジック)
+            # デプロイコントローラーは新規作成時のみ有効
             create_or_update_service "$REGION" "$CLUSTER_NAME" "$TASK_DEFINITION_NAME" "$SERVICE_NAME" \
                 "$LAUNCH_TYPE" "$DESIRED_COUNT" "$SUBNETS_INPUT" "$SECURITY_GROUPS_INPUT" \
                 "$PUBLIC_IP" "$TARGET_GROUP_INPUT" "$CONTAINER_NAME" "$CONTAINER_PORT" \
                 "$HEALTH_CHECK_PERIOD" "$MIN_CAPACITY" "$MAX_CAPACITY" "$TARGET_VALUE" \
-                "$OUT_COOLDOWN" "$IN_COOLDOWN" "$TAGS_STR" || continue # エラーがあれば次のサービスへスキップ
+                "$OUT_COOLDOWN" "$IN_COOLDOWN" "$TAGS_STR" "$DEPLOYMENT_CONTROLLER" || continue # エラーがあれば次のサービスへスキップ
             ;;
 
         "remove")
@@ -413,90 +501,44 @@ do
             fi
 
             echo -e "\n--- サービス ${SERVICE_NAME} の Auto Scaling ポリシーを削除中 ---"
-            DELETE_SCALING_POLICY_CMD="aws application-autoscaling delete-scaling-policy \
-                --region \"$REGION\" \
+            set +e
+            aws application-autoscaling delete-scaling-policy \
+                --region "$REGION" \
                 --no-cli-pager \
                 --service-namespace ecs \
                 --scalable-dimension ecs:service:DesiredCount \
-                --resource-id \"service/$CLUSTER_NAME/$SERVICE_NAME\" \
-                --policy-name \"${SERVICE_NAME}-cpu-scale-policy\""
-            echo "$DELETE_SCALING_POLICY_CMD"
-            set +e
-            eval "$DELETE_SCALING_POLICY_CMD"
-            DELETE_SCALING_POLICY_STATUS=$?
-            set -e
-            if [[ $DELETE_SCALING_POLICY_STATUS -ne 0 ]]; then
+                --resource-id "service/$CLUSTER_NAME/$SERVICE_NAME" \
+                --policy-name "${SERVICE_NAME}-cpu-scale-policy" 2>/dev/null
+            if [[ $? -ne 0 ]]; then
                 echo "警告: サービス ${SERVICE_NAME} のスケーリングポリシー削除中にエラーが発生しました。（スキップします）"
             else
                 echo "サービス ${SERVICE_NAME} のスケーリングポリシーを正常に削除しました。"
             fi
+            set -e
 
             echo -e "\n--- サービス ${SERVICE_NAME} のスケーラブルターゲットの登録を解除中 ---"
-            DEREGISTER_SCALABLE_TARGET_CMD="aws application-autoscaling deregister-scalable-target \
-                --region \"$REGION\" \
+            set +e
+            aws application-autoscaling deregister-scalable-target \
+                --region "$REGION" \
                 --no-cli-pager \
                 --service-namespace ecs \
                 --scalable-dimension ecs:service:DesiredCount \
-                --resource-id \"service/$CLUSTER_NAME/$SERVICE_NAME\""
-            echo "$DEREGISTER_SCALABLE_TARGET_CMD"
-            set +e
-            eval "$DEREGISTER_SCALABLE_TARGET_CMD"
-            DEREGISTER_SCALABLE_TARGET_STATUS=$?
-            set -e
-            if [[ $DEREGISTER_SCALABLE_TARGET_STATUS -ne 0 ]]; then
+                --resource-id "service/$CLUSTER_NAME/$SERVICE_NAME" 2>/dev/null
+            if [[ $? -ne 0 ]]; then
                 echo "警告: サービス ${SERVICE_NAME} のスケーラブルターゲットの登録解除中にエラーが発生しました。（スキップします）"
             else
                 echo "サービス ${SERVICE_NAME} のスケーラブルターゲットの登録を正常に解除しました。"
             fi
-
-            echo -e "\n--- サービス ${SERVICE_NAME} のdesired-countを0に設定中 ---"
-            # サービスを削除する前にdesired-countを0に設定してタスクを停止させる
-            UPDATE_TO_ZERO_CMD="aws ecs update-service \
-                --region \"$REGION\" \
-                --no-cli-pager \
-                --cluster \"$CLUSTER_NAME\" \
-                --service \"$SERVICE_NAME\" \
-                --desired-count 0"
-            echo "$UPDATE_TO_ZERO_CMD"
-            set +e
-            eval "$UPDATE_TO_ZERO_CMD"
-            UPDATE_TO_ZERO_STATUS=$?
             set -e
-            if [[ $UPDATE_TO_ZERO_STATUS -ne 0 ]]; then
-                echo "警告: サービス ${SERVICE_NAME} のdesired-countを0に設定中にエラーが発生しました。（続行します）"
-            fi
 
-            echo "サービス ${SERVICE_NAME} のタスクが停止するまで待機中..."
-            set +e # waitコマンドが失敗してもスクリプトを終了させない
-            aws ecs wait services-stable \
-                --region "$REGION" \
-                --cluster "$CLUSTER_NAME" \
-                --services "$SERVICE_NAME" \
-                --no-cli-pager 2>/dev/null || true # サービスが消滅する可能性があるのでエラーは無視
-            WAIT_FOR_STOP_STATUS=$?
-            set -e
-            if [[ $WAIT_FOR_STOP_STATUS -ne 0 ]]; then
-                echo "警告: サービス ${SERVICE_NAME} のタスク停止待機中に問題が発生したか、サービスが既に存在しません。（続行します）"
-            fi
-
-            echo -e "\n--- サービス ${SERVICE_NAME} を削除中 ---"
-            DELETE_SERVICE_CMD="aws ecs delete-service \
-                --region \"$REGION\" \
-                --no-cli-pager \
-                --cluster \"$CLUSTER_NAME\" \
-                --service \"$SERVICE_NAME\" --force"
-            echo "$DELETE_SERVICE_CMD"
-            set +e
-            eval "$DELETE_SERVICE_CMD"
-            DELETE_SERVICE_STATUS=$?
-            set -e
-            if [[ $DELETE_SERVICE_STATUS -ne 0 ]]; then
+            # desired-countを0に設定してタスクを停止させる処理は force_delete_draining_service 関数に集約済み
+            # 削除処理を force_delete_draining_service 関数に委譲
+            if ! force_delete_draining_service "$REGION" "$CLUSTER_NAME" "$SERVICE_NAME"; then
                 echo "サービス ${SERVICE_NAME} の削除中にエラーが発生しました。次のサービスへスキップします。"
                 continue
             fi
-            echo "サービス ${SERVICE_NAME} を正常に削除しました。"
             ;;
-        
+            
         *)
             echo "エラー: 不明なアクション: ${ACTION} です。'add' または 'remove' のいずれかを指定してください。サービス ${SERVICE_NAME} をスキップします。" >&2
             continue

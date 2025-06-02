@@ -133,16 +133,18 @@ update_rds_instance() {
         if [ "$(echo "$MULTI_AZ" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then CMD+=("--no-multi-az"); params_added=1; fi
     fi
 
-    # Performance Insights
-    if [ -n "$ENABLE_PERFORMANCE_INSIGHTS" ]; then
-        if [ "$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
-            CMD+=("--enable-performance-insights")
+    # データベースインサイト (standard または advanced のみ有効)
+    if [ -n "$DATABASE_INSIGHTS_MODE" ]; then
+        local insights_mode_lower="$(echo "$DATABASE_INSIGHTS_MODE" | tr '[:upper:]' '[:lower:]')"
+        if [ "$insights_mode_lower" = "standard" ]; then
+            CMD+=("--database-insights-mode" "standard")
             params_added=1
-            if [ -n "$PERFORMANCE_RETENTION" ]; then
-                CMD+=("--performance-insights-retention-period" "$PERFORMANCE_RETENTION")
-            fi
-        elif [ "$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then
-            CMD+=("--no-enable-performance-insights")
+        elif [ "$insights_mode_lower" = "advanced" ]; then
+            # advancedモードには Performance Insights が必要で、少なくとも465日のリテンション期間が必要
+            CMD+=("--database-insights-mode" "advanced")
+            CMD+=("--enable-performance-insights")
+            CMD+=("--performance-insights-retention-period" "465")
+            log "INFO: ${DB_IDENTIFIER}: Database Insights の Advanced モードに必要な Performance Insights を自動的に有効化し、465日のリテンション期間を設定しました。"
             params_added=1
         fi
     fi
@@ -378,15 +380,20 @@ create_rds_instance() {
             if [ "$(echo "$MULTI_AZ" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then CMD+=("--multi-az"); fi
             if [ "$(echo "$MULTI_AZ" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then CMD+=("--no-multi-az"); fi
         fi
-        if [ -n "$ENABLE_PERFORMANCE_INSIGHTS" ]; then
-            if [ "$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
+        # データベースインサイト (standard または advanced のみ有効)
+        if [ -n "$DATABASE_INSIGHTS_MODE" ]; then
+            local insights_mode_lower="$(echo "$DATABASE_INSIGHTS_MODE" | tr '[:upper:]' '[:lower:]')"
+            # create操作ではdisabledは指定できないため、standardとadvancedの場合のみパラメータを追加
+            if [ "$insights_mode_lower" = "standard" ]; then
+                CMD+=("--database-insights-mode" "standard")
+            elif [ "$insights_mode_lower" = "advanced" ]; then
+                # advancedモードには Performance Insights が必要で、少なくとも465日のリテンション期間が必要
+                CMD+=("--database-insights-mode" "advanced")
                 CMD+=("--enable-performance-insights")
-                if [ -n "$PERFORMANCE_RETENTION" ]; then
-                    CMD+=("--performance-insights-retention-period" "$PERFORMANCE_RETENTION")
-                fi
-            elif [ "$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then
-                CMD+=("--no-enable-performance-insights")
+                CMD+=("--performance-insights-retention-period" "465")
+                log "INFO: ${DB_IDENTIFIER}: Database Insights の Advanced モードに必要な Performance Insights を自動的に有効化し、465日のリテンション期間を設定しました。"
             fi
+            # disabledの場合はパラメータを追加しない（デフォルト値になる）
         fi
         if [ -n "$LOG_EXPORTS" ]; then
             IFS=';' read -ra LOG_EXPORTS_ARRAY <<< "$LOG_EXPORTS"
@@ -400,19 +407,6 @@ create_rds_instance() {
             fi
         fi
         # 認証情報の設定 (Secrets Manager 優先)
-
-        # if [ -n "$MANAGE_MASTER_PASSWORD" ]; then
-        #     log "${DB_IDENTIFIER}: Secrets Manager ARN を使用して認証情報を設定します."
-        #     CMD+=("--master-user-secret-arn" "$SECRET_MANAGER_ARN")
-        # elif [ -n "$MASTER_USERNAME" ] && [ -n "$MASTER_PASSWORD" ]; then
-        #     log "${DB_IDENTIFIER}: マスターユーザー名とパスワードを使用して認証情報を設定します."
-        #     CMD+=("--master-username" "$MASTER_USERNAME")
-        #     CMD+=("--master-user-password" "$MASTER_PASSWORD")
-        # else
-        #     log "エラー: 新規作成には Secrets Manager ARN または マスターユーザー名/マスターパスワード ペアのどちらかが必要です."
-        #     return 1
-        # fi
-
         if [ "$(echo "$MANAGE_MASTER_PASSWORD" | tr -d '\r' | xargs | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
             log "${DB_IDENTIFIER}: Secrets Manager を使用して認証情報を設定します。"
             CMD+=("--master-username" "$MASTER_USERNAME")
@@ -477,7 +471,7 @@ main() {
 
     # CSVファイルの内容を読み込んで処理
     # DELETION_PROTECTION カラムを追加
-    while IFS=, read -r REGION DB_IDENTIFIER ENGINE ENGINE_VERSION INSTANCE_CLASS STORAGE_TYPE ALLOCATED_STORAGE MAX_ALLOCATED_STORAGE DB_NAME MASTER_USERNAME MASTER_PASSWORD VPC_SG_IDS SUBNET_GROUP PARAM_GROUP OPT_GROUP PUBLIC_ACCESS ENABLE_PERFORMANCE_INSIGHTS BACKUP_RETENTION BACKUP_WINDOW MAINTENANCE_WINDOW PERFORMANCE_RETENTION TAGS MULTI_AZ LOG_EXPORTS SNAPSHOT_IDENTIFIER SOURCE_DB_IDENTIFIER MANAGE_MASTER_PASSWORD DELETION_PROTECTION; do
+    while IFS=, read -r REGION DB_IDENTIFIER ENGINE ENGINE_VERSION INSTANCE_CLASS STORAGE_TYPE ALLOCATED_STORAGE MAX_ALLOCATED_STORAGE DB_NAME MASTER_USERNAME MASTER_PASSWORD VPC_SG_IDS SUBNET_GROUP PARAM_GROUP OPT_GROUP PUBLIC_ACCESS DATABASE_INSIGHTS_MODE BACKUP_RETENTION BACKUP_WINDOW MAINTENANCE_WINDOW TAGS MULTI_AZ LOG_EXPORTS SNAPSHOT_IDENTIFIER SOURCE_DB_IDENTIFIER MANAGE_MASTER_PASSWORD DELETION_PROTECTION; do
         # ヘッダー行と空行をスキップ
         if [ "$(echo "$REGION" | xargs)" = "REGION" ]; then continue; fi
         if [ -z "$(echo "$REGION" | xargs)" ] && [ -z "$(echo "$DB_IDENTIFIER" | xargs)" ]; then continue; fi
@@ -501,11 +495,10 @@ main() {
         PARAM_GROUP=$(echo "$PARAM_GROUP" | xargs)
         OPT_GROUP=$(echo "$OPT_GROUP" | xargs)
         PUBLIC_ACCESS=$(echo "$PUBLIC_ACCESS" | xargs)
-        ENABLE_PERFORMANCE_INSIGHTS=$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | xargs)
+        DATABASE_INSIGHTS_MODE=$(echo "$DATABASE_INSIGHTS_MODE" | xargs)
         BACKUP_RETENTION=$(echo "$BACKUP_RETENTION" | xargs)
         BACKUP_WINDOW=$(echo "$BACKUP_WINDOW" | xargs)
         MAINTENANCE_WINDOW=$(echo "$MAINTENANCE_WINDOW" | xargs)
-        PERFORMANCE_RETENTION=$(echo "$PERFORMANCE_RETENTION" | xargs)
         TAGS=$(echo "$TAGS" | xargs)
         MULTI_AZ=$(echo "$MULTI_AZ" | xargs)
         LOG_EXPORTS=$(echo "$LOG_EXPORTS" | xargs)

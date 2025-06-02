@@ -150,22 +150,19 @@ update_aurora_cluster() {
         if [ "$(echo "$DELETION_PROTECTION" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then CMD+=("--no-deletion-protection"); params_added=1; fi
     fi
 
-    # Performance Insightsの有効/無効と保持期間に対応
-    if [ -n "$ENABLE_PERFORMANCE_INSIGHTS" ]; then
-        if [ "$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
-            CMD+=("--enable-performance-insights")
+    # データベースインサイト (standard または advanced のみ有効)
+    if [ -n "$DATABASE_INSIGHTS_MODE" ]; then
+        local insights_mode_lower="$(echo "$DATABASE_INSIGHTS_MODE" | tr '[:upper:]' '[:lower:]')"
+        if [ "$insights_mode_lower" = "standard" ]; then
+            CMD+=("--database-insights-mode" "standard")
             params_added=1
-            if [ -n "$PERFORMANCE_INSIGHTS_RETENTION" ]; then
-                 local valid_retention_values=(7 31 62 93 124 155 186 217 248 279 310 341 372 403 434 465 496 527 558 589 620 651 682 713 731)
-                 if [[ " ${valid_retention_values[*]} " =~ " $PERFORMANCE_INSIGHTS_RETENTION " ]]; then
-                    CMD+=("--performance-insights-retention-period" "$PERFORMANCE_INSIGHTS_RETENTION")
-                 else
-                    log "警告: 無効なPerformance Insightsリテンション期間 '$PERFORMANCE_INSIGHTS_RETENTION' が指定されました。許可される値: ${valid_retention_values[*]}"
-                 fi
-            fi
-        elif [ "$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | tr '[:lower:]' '[:upper:]')" = "FALSE" ]; then
-            CMD+=("--no-enable-performance-insights")
-            params_added=1
+            elif [ "$insights_mode_lower" = "advanced" ]; then
+                # advancedモードには Performance Insights が必要で、少なくとも465日のリテンション期間が必要
+                CMD+=("--database-insights-mode" "advanced")
+                CMD+=("--enable-performance-insights")
+                CMD+=("--performance-insights-retention-period" "465")
+                log "INFO: ${DB_IDENTIFIER}: Database Insights の Advanced モードに必要な Performance Insights を自動的に有効化し、465日のリテンション期間を設定しました。"
+                params_added=1
         fi
     fi
 
@@ -355,11 +352,21 @@ create_aurora_cluster() {
         if [ "$(echo "$DELETION_PROTECTION" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
             CMD+=("--deletion-protection")
         fi
-        if [ "$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | tr '[:lower:]' '[:upper:]')" = "TRUE" ]; then
-            CMD+=("--enable-performance-insights")
-            if [ -n "$PERFORMANCE_INSIGHTS_RETENTION" ]; then
-                 CMD+=("--performance-insights-retention-period" "$PERFORMANCE_INSIGHTS_RETENTION")
+
+        # データベースインサイト (standard または advanced のみ有効)
+        if [ -n "$DATABASE_INSIGHTS_MODE" ]; then
+            local insights_mode_lower="$(echo "$DATABASE_INSIGHTS_MODE" | tr '[:upper:]' '[:lower:]')"
+            # create操作ではdisabledは指定できないため、standardとadvancedの場合のみパラメータを追加
+            if [ "$insights_mode_lower" = "standard" ]; then
+                CMD+=("--database-insights-mode" "standard")
+            elif [ "$insights_mode_lower" = "advanced" ]; then
+                # advancedモードには Performance Insights が必要で、少なくとも465日のリテンション期間が必要
+                CMD+=("--database-insights-mode" "advanced")
+                CMD+=("--enable-performance-insights")
+                CMD+=("--performance-insights-retention-period" "465")
+                log "INFO: ${DB_IDENTIFIER}: Database Insights の Advanced モードに必要な Performance Insights を自動的に有効化し、465日のリテンション期間を設定しました。"
             fi
+            # disabledの場合はパラメータを追加しない（デフォルト値になる）
         fi
         # タグ
         if [ "${#TAG_CMD_PART[@]}" -gt 0 ]; then
@@ -669,7 +676,7 @@ main() {
     # IFS=, で区切り文字をカンマに設定
     # read -r でバックスラッシュをそのまま読み込む
     # 各カラムを適切な変数に割り当て
-    while IFS=, read -r REGION DB_IDENTIFIER ENGINE ENGINE_VERSION DB_INSTANCE_CLASS CLUSTER_PARAMETER_GROUP INSTANCE_PARAMETER_GROUP SECURITY_GROUPS DB_SUBNET_GROUP MASTER_USERNAME MASTER_PASSWORD DB_NAME BACKUP_RETENTION PREFERRED_BACKUP_WINDOW PREFERRED_MAINTENANCE_WINDOW IAM_AUTH CLOUDWATCH_LOGS_EXPORTS DELETION_PROTECTION PUBLICLY_ACCESSIBLE ENABLE_PERFORMANCE_INSIGHTS PERFORMANCE_INSIGHTS_RETENTION AURORA_INSTANCE_COUNT TAGS SNAPSHOT_IDENTIFIER SOURCE_DB_IDENTIFIER AURORA_STORAGE_TYPE MANAGE_MASTER_PASSWORD; do
+    while IFS=, read -r REGION DB_IDENTIFIER ENGINE ENGINE_VERSION DB_INSTANCE_CLASS CLUSTER_PARAMETER_GROUP INSTANCE_PARAMETER_GROUP SECURITY_GROUPS DB_SUBNET_GROUP MASTER_USERNAME MASTER_PASSWORD DB_NAME BACKUP_RETENTION PREFERRED_BACKUP_WINDOW PREFERRED_MAINTENANCE_WINDOW IAM_AUTH CLOUDWATCH_LOGS_EXPORTS DELETION_PROTECTION PUBLICLY_ACCESSIBLE DATABASE_INSIGHTS_MODE AURORA_INSTANCE_COUNT TAGS SNAPSHOT_IDENTIFIER SOURCE_DB_IDENTIFIER AURORA_STORAGE_TYPE MANAGE_MASTER_PASSWORD; do
         # ヘッダー行と空行をスキップ
         if [ "$(echo "$REGION" | xargs)" = "REGION" ]; then continue; fi
         if [ -z "$(echo "$REGION" | xargs)" ] && [ -z "$(echo "$DB_IDENTIFIER" | xargs)" ]; then continue; fi
@@ -696,8 +703,7 @@ main() {
         CLOUDWATCH_LOGS_EXPORTS=$(echo "$CLOUDWATCH_LOGS_EXPORTS" | xargs)
         DELETION_PROTECTION=$(echo "$DELETION_PROTECTION" | xargs)
         PUBLICLY_ACCESSIBLE=$(echo "$PUBLICLY_ACCESSIBLE" | xargs)
-        ENABLE_PERFORMANCE_INSIGHTS=$(echo "$ENABLE_PERFORMANCE_INSIGHTS" | xargs)
-        PERFORMANCE_INSIGHTS_RETENTION=$(echo "$PERFORMANCE_INSIGHTS_RETENTION" | xargs)
+        DATABASE_INSIGHTS_MODE=$(echo "$DATABASE_INSIGHTS_MODE" | xargs)
         AURORA_INSTANCE_COUNT=$(echo "$AURORA_INSTANCE_COUNT" | xargs)
         TAGS=$(echo "$TAGS" | xargs)
         SNAPSHOT_IDENTIFIER=$(echo "$SNAPSHOT_IDENTIFIER" | xargs)

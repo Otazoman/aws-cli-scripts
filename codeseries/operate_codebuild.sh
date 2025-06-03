@@ -2,8 +2,8 @@
 
 # CSVファイル名を引数から取得
 if [ -z "$1" ]; then
-    echo "Usage: $0 <path_to_csv_file>"
-    echo "Example: $0 codebuild_projects.csv"
+    echo "使用法: $0 <CSVファイルのパス>"
+    echo "例: $0 codebuild_projects.csv"
     exit 1
 fi
 
@@ -11,83 +11,16 @@ CSV_FILE="$1" # 引数で渡されたファイル名を設定
 
 # CSVファイルが存在するかチェック
 if [ ! -f "$CSV_FILE" ]; then
-    echo "Error: CSV file '$CSV_FILE' not found."
+    echo "エラー: CSVファイル '$CSV_FILE' が見つかりません。"
     exit 1
 fi
 
 IAM_POLICY_NAME_PREFIX="CodeBuildServicePolicy" # IAMポリシー名のプレフィックス
 DEFAULT_AWS_REGION="ap-northeast-1" # デフォルトリージョン (CSVで指定がない場合)
 
-# CodeBuildに必要なIAMポリシーJSON
-# CloudWatch Logsへの書き込み、S3への読み書き、ECRへの読み取り、CodeCommitへの読み取り
-# 必要に応じて権限を調整してください
-CODEBUILD_ASSUME_ROLE_POLICY_DOC='{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "codebuild.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}'
+# 注: IAMロールは事前に設定されたものを使用するため、ポリシー定義は不要です
 
-CODEBUILD_MANAGED_POLICY_DOC='{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "logs:CreateLogGroup",
-                "logs:CreateLogStream",
-                "logs:PutLogEvents"
-            ],
-            "Resource": [
-                "arn:aws:logs:*:*:log-group:/aws/codebuild/*"
-            ]
-        },
-        {
-            "Effect": "Allow",
-            "Action": [
-                "s3:PutObject",
-                "s3:GetObject",
-                "s3:GetObjectVersion",
-                "s3:GetBucketAcl",
-                "s3:GetBucketLocation",
-                "s3:DeleteObject",
-                "s3:ListBucket"
-            ],
-            "Resource": [
-                "arn:aws:s3:::*/*",
-                "arn:aws:s3:::*"
-            ]
-        },
-        {
-            "Effect": "Allow",
-            "Action": [
-                "ecr:BatchCheckLayerAvailability",
-                "ecr:GetDownloadUrlForLayer",
-                "ecr:GetRepositoryPolicy",
-                "ecr:DescribeRepositories",
-                "ecr:ListImages",
-                "ecr:BatchGetImage",
-                "ecr:GetAuthorizationToken"
-            ],
-            "Resource": "*"
-        },
-        {
-            "Effect": "Allow",
-            "Action": [
-                "codecommit:GitPull"
-            ],
-            "Resource": "*"
-        }
-    ]
-}'
-
-echo "Starting CodeBuild project management script with CSV: $CSV_FILE"
+echo "CSVファイル: $CSV_FILE を使用してCodeBuildプロジェクト管理スクリプトを開始します"
 
 # CSVファイルを読み込み、各行を処理
 # IFS (Internal Field Separator) を変更してカンマ区切りで読み込む
@@ -100,68 +33,30 @@ cat "$CSV_FILE" | while IFS=, read -r ACTION PROJECT_NAME SOURCE_TYPE SOURCE_LOC
     [[ -z "$ACTION" ]] && continue # 空行スキップ
 
     CURRENT_REGION="${AWS_REGION_FROM_CSV:-$DEFAULT_AWS_REGION}" # CSVからリージョンを取得、なければデフォルト
-    IAM_POLICY_NAME="${IAM_POLICY_NAME_PREFIX}-${SERVICE_ROLE_NAME}"
+    # IAMロールは事前に設定済みのものを使用する
 
-    echo "--- Processing ${ACTION} for project: $PROJECT_NAME (Region: $CURRENT_REGION) ---"
+    echo "--- プロジェクト: $PROJECT_NAME の $ACTION 処理を実行中（リージョン: $CURRENT_REGION）---"
 
     case "$ACTION" in
         add)
-            # --- IAMロールの存在確認と作成 ---
-            echo "Checking IAM role: $SERVICE_ROLE_NAME in region $CURRENT_REGION..."
+            # --- 既存IAMロールからARNを取得 ---
+            echo "IAMロールのARNを取得しています: $SERVICE_ROLE_NAME..."
             SERVICE_ROLE_ARN=$(aws iam get-role --role-name "$SERVICE_ROLE_NAME" --query 'Role.Arn' --output text 2>/dev/null)
 
             if [ -z "$SERVICE_ROLE_ARN" ]; then
-                echo "IAM role '$SERVICE_ROLE_NAME' not found. Creating..."
-                SERVICE_ROLE_ARN=$(aws iam create-role \
-                    --role-name "$SERVICE_ROLE_NAME" \
-                    --assume-role-policy-document "$CODEBUILD_ASSUME_ROLE_POLICY_DOC" \
-                    --query 'Role.Arn' \
-                    --output text \
-                    --region "$CURRENT_REGION" 2>/dev/null)
-
-                if [ $? -ne 0 ]; then
-                    echo "Error: Failed to create IAM role '$SERVICE_ROLE_NAME'. Skipping project."
-                    continue
-                fi
-                echo "IAM role '$SERVICE_ROLE_NAME' created with ARN: $SERVICE_ROLE_ARN"
-
-                # IAMポリシーを作成し、ロールにアタッチ
-                IAM_POLICY_ARN=$(aws iam create-policy \
-                    --policy-name "$IAM_POLICY_NAME" \
-                    --policy-document "$CODEBUILD_MANAGED_POLICY_DOC" \
-                    --query 'Policy.Arn' \
-                    --output text \
-                    --region "$CURRENT_REGION" 2>/dev/null)
-
-                if [ $? -ne 0 ]; then
-                    echo "Error: Failed to create IAM policy '$IAM_POLICY_NAME'. Skipping project."
-                    continue
-                fi
-                echo "IAM policy '$IAM_POLICY_NAME' created with ARN: $IAM_POLICY_ARN"
-
-                aws iam attach-role-policy \
-                    --role-name "$SERVICE_ROLE_NAME" \
-                    --policy-arn "$IAM_POLICY_ARN" \
-                    --region "$CURRENT_REGION" 2>/dev/null
-
-                if [ $? -ne 0 ]; then
-                    echo "Error: Failed to attach policy '$IAM_POLICY_ARN' to role '$SERVICE_ROLE_NAME'. Skipping project."
-                    continue
-                fi
-                echo "IAM policy attached to role '$SERVICE_ROLE_NAME'."
-                # ロール作成・ポリシーアタッチ後の反映を待つために少し待機
-                sleep 10
+                echo "エラー: IAMロール '$SERVICE_ROLE_NAME' が見つかりません。このスクリプトを実行する前にロールが存在することを確認してください。プロジェクトをスキップします。"
+                continue
             else
-                echo "IAM role '$SERVICE_ROLE_NAME' already exists with ARN: $SERVICE_ROLE_ARN"
+                echo "IAMロール '$SERVICE_ROLE_NAME' が見つかりました。ARN: $SERVICE_ROLE_ARN"
             fi
 
             # --- S3バケットの存在確認と作成 ---
             if [[ "$ARTIFACTS_TYPE" == "S3" && -n "$ARTIFACTS_LOCATION" ]]; then
-                echo "Checking S3 bucket: $ARTIFACTS_LOCATION in region $CURRENT_REGION..."
+                echo "S3バケットを確認中: $ARTIFACTS_LOCATION（リージョン: $CURRENT_REGION）..."
                 aws s3api head-bucket --bucket "$ARTIFACTS_LOCATION" --region "$CURRENT_REGION" &>/dev/null
 
                 if [ $? -ne 0 ]; then
-                    echo "S3 bucket '$ARTIFACTS_LOCATION' not found in region '$CURRENT_REGION'. Creating..."
+                    echo "S3バケット '$ARTIFACTS_LOCATION' がリージョン '$CURRENT_REGION' に見つかりません。作成します..."
                     if [[ "$CURRENT_REGION" != "us-east-1" ]]; then
                         aws s3api create-bucket \
                             --bucket "$ARTIFACTS_LOCATION" \
@@ -176,17 +71,17 @@ cat "$CSV_FILE" | while IFS=, read -r ACTION PROJECT_NAME SOURCE_TYPE SOURCE_LOC
                     fi
 
                     if [ $? -ne 0 ]; then
-                        echo "Error: Failed to create S3 bucket '$ARTIFACTS_LOCATION' in region '$CURRENT_REGION'. Skipping project."
+                        echo "エラー: S3バケット '$ARTIFACTS_LOCATION' をリージョン '$CURRENT_REGION' に作成できませんでした。プロジェクトをスキップします。"
                         continue
                     fi
-                    echo "S3 bucket '$ARTIFACTS_LOCATION' created successfully."
+                    echo "S3バケット '$ARTIFACTS_LOCATION' が正常に作成されました。"
                 else
-                    echo "S3 bucket '$ARTIFACTS_LOCATION' already exists."
+                    echo "S3バケット '$ARTIFACTS_LOCATION' は既に存在します。"
                 fi
             fi
 
             # --- CodeBuildプロジェクトの作成 ---
-            echo "Creating CodeBuild project: $PROJECT_NAME..."
+            echo "CodeBuildプロジェクトを作成中: $PROJECT_NAME..."
 
             # JSONパラメータの構築
             SOURCE_JSON=$(cat <<EOF
@@ -232,103 +127,66 @@ EOF
                 --artifacts "$ARTIFACTS_JSON" \
                 --environment "$ENVIRONMENT_JSON" \
                 --service-role "$SERVICE_ROLE_ARN" \
-                --description "CodeBuild project for $PROJECT_NAME created via script." \
+                --description "スクリプトにより作成された $PROJECT_NAME のCodeBuildプロジェクト" \
                 --region "$CURRENT_REGION" \
                 --no-cli-pager 2>/dev/null
 
             if [ $? -eq 0 ]; then
-                echo "Project '$PROJECT_NAME' created successfully!"
+                echo "プロジェクト '$PROJECT_NAME' が正常に作成されました！"
             else
-                echo "Error: Failed to create project '$PROJECT_NAME'. It might already exist or there's another issue."
+                echo "エラー: プロジェクト '$PROJECT_NAME' の作成に失敗しました。既に存在するか、他の問題がある可能性があります。"
             fi
             ;;
 
         remove)
             # --- CodeBuildプロジェクトの削除 ---
-            echo "Attempting to delete CodeBuild project: $PROJECT_NAME in region $CURRENT_REGION..."
+            echo "CodeBuildプロジェクトの削除を試みています: $PROJECT_NAME（リージョン: $CURRENT_REGION）..."
             aws codebuild delete-project --name "$PROJECT_NAME" --region "$CURRENT_REGION" --no-cli-pager &>/dev/null
 
             if [ $? -eq 0 ]; then
-                echo "CodeBuild project '$PROJECT_NAME' deleted successfully!"
+                echo "CodeBuildプロジェクト '$PROJECT_NAME' が正常に削除されました！"
             else
-                echo "CodeBuild project '$PROJECT_NAME' not found or failed to delete. Skipping."
+                echo "CodeBuildプロジェクト '$PROJECT_NAME' が見つからないか、削除に失敗しました。スキップします。"
             fi
 
             # --- S3バケットの削除 ---
             if [[ "$ARTIFACTS_TYPE" == "S3" && -n "$ARTIFACTS_LOCATION" ]]; then
-                echo "Attempting to delete S3 bucket: $ARTIFACTS_LOCATION in region $CURRENT_REGION..."
+                echo "S3バケットの削除を試みています: $ARTIFACTS_LOCATION（リージョン: $CURRENT_REGION）..."
                 aws s3api head-bucket --bucket "$ARTIFACTS_LOCATION" --region "$CURRENT_REGION" &>/dev/null
 
                 if [ $? -eq 0 ]; then
-                    echo "S3 bucket '$ARTIFACTS_LOCATION' exists. Deleting contents first..."
+                    echo "S3バケット '$ARTIFACTS_LOCATION' が存在します。まずコンテンツを削除します..."
                     aws s3 rm "s3://$ARTIFACTS_LOCATION" --recursive --region "$CURRENT_REGION" --no-cli-pager &>/dev/null
                     if [ $? -eq 0 ]; then
-                        echo "S3 bucket '$ARTIFACTS_LOCATION' contents deleted."
+                        echo "S3バケット '$ARTIFACTS_LOCATION' のコンテンツが削除されました。"
                     else
-                        echo "Warning: Failed to delete contents of S3 bucket '$ARTIFACTS_LOCATION'. Might be empty or permissions issue."
+                        echo "警告: S3バケット '$ARTIFACTS_LOCATION' のコンテンツの削除に失敗しました。空であるか、権限の問題がある可能性があります。"
                     fi
 
                     aws s3api delete-bucket --bucket "$ARTIFACTS_LOCATION" --region "$CURRENT_REGION" --no-cli-pager &>/dev/null
                     if [ $? -eq 0 ]; then
-                        echo "S3 bucket '$ARTIFACTS_LOCATION' deleted successfully!"
+                        echo "S3バケット '$ARTIFACTS_LOCATION' が正常に削除されました！"
                     else
-                        echo "Error: Failed to delete S3 bucket '$ARTIFACTS_LOCATION'. Check permissions or if it's truly empty."
+                        echo "エラー: S3バケット '$ARTIFACTS_LOCATION' の削除に失敗しました。権限を確認するか、本当に空であることを確認してください。"
                     fi
                 else
-                    echo "S3 bucket '$ARTIFACTS_LOCATION' not found or already deleted. Skipping."
+                    echo "S3バケット '$ARTIFACTS_LOCATION' が見つからないか、既に削除されています。スキップします。"
                 fi
             fi
 
-            # --- IAMロールとポリシーの削除 ---
-            echo "Attempting to delete IAM role: $SERVICE_ROLE_NAME and its policy in region $CURRENT_REGION..."
-            SERVICE_ROLE_ARN=$(aws iam get-role --role-name "$SERVICE_ROLE_NAME" --query 'Role.Arn' --output text 2>/dev/null)
-
-            if [ -n "$SERVICE_ROLE_ARN" ]; then
-                IAM_POLICY_ARN=$(aws iam list-policies --scope Local --query "Policies[?PolicyName=='${IAM_POLICY_NAME}'].Arn" --output text --region "$CURRENT_REGION" 2>/dev/null)
-
-                if [ -n "$IAM_POLICY_ARN" ]; then
-                    echo "Detaching policy '$IAM_POLICY_NAME' from role '$SERVICE_ROLE_NAME'..."
-                    aws iam detach-role-policy \
-                        --role-name "$SERVICE_ROLE_NAME" \
-                        --policy-arn "$IAM_POLICY_ARN" \
-                        --region "$CURRENT_REGION" 2>/dev/null
-                    if [ $? -eq 0 ]; then
-                        echo "Policy detached."
-                    else
-                        echo "Warning: Failed to detach policy. It might already be detached."
-                    fi
-
-                    echo "Deleting policy '$IAM_POLICY_NAME'..."
-                    aws iam delete-policy --policy-arn "$IAM_POLICY_ARN" --region "$CURRENT_REGION" 2>/dev/null
-                    if [ $? -eq 0 ]; then
-                        echo "Policy '$IAM_POLICY_NAME' deleted successfully!"
-                    else
-                        echo "Warning: Failed to delete policy '$IAM_POLICY_NAME'. It might be in use or already deleted."
-                    fi
-                else
-                    echo "IAM policy '$IAM_POLICY_NAME' not found. Skipping policy deletion."
-                fi
-
-                echo "Deleting IAM role '$SERVICE_ROLE_NAME'..."
-                aws iam delete-role --role-name "$SERVICE_ROLE_NAME" --region "$CURRENT_REGION" 2>/dev/null
-                if [ $? -eq 0 ]; then
-                    echo "IAM role '$SERVICE_ROLE_NAME' deleted successfully!"
-                else
-                    echo "Error: Failed to delete IAM role '$SERVICE_ROLE_NAME'. It might have other policies attached or be in use."
-                fi
-            else
-                echo "IAM role '$SERVICE_ROLE_NAME' not found or already deleted. Skipping role deletion."
-            fi
+            # --- IAMロールとポリシーの削除は実行しない ---
+            echo "注意: 設定に従い、IAMロール '$SERVICE_ROLE_NAME' は削除されません。"
+            # 設定に基づき、IAMロールは削除しません
             ;;
 
         *)
-            echo "Warning: Unknown ACTION '$ACTION'. Skipping project: $PROJECT_NAME."
+            echo "警告: 不明なアクション '$ACTION'。プロジェクトをスキップします: $PROJECT_NAME"
             ;;
     esac
 
-    echo "--- Finished processing project: $PROJECT_NAME ---"
+    echo "--- プロジェクト: $PROJECT_NAME の処理が完了しました ---"
     echo "" # 空行を追加して見やすくする
 
 done < "$CSV_FILE" # CSVファイルをwhileループの入力にする
 
-echo "Script finished."
+echo "スクリプトが完了しました。"

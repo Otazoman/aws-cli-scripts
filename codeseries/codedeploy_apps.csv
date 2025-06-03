@@ -1,0 +1,4 @@
+ACTION,APPLICATION_NAME,AWS_REGION,DEPLOYMENT_GROUP_NAME,ROLE_NAME,SERVICE_NAME,CLUSTER_NAME,TARGET_GROUP_NAME_BLUE,TARGET_GROUP_NAME_GREEN,LB_NAME,PROD_LISTENER_PORT,PROD_LISTENER_PROTOCOL,TEST_LISTENER_PORT,TEST_LISTENER_PROTOCOL
+remove,ecsdeploysample,ap-northeast-1,ecsgroup1,ecsCodeDeployRole,my-first-service,my-prod-cluster,tg-ecs,tg-ecs2,ecs-test-alb,80,HTTP,8080,HTTP
+remove,ecsdeploysample,ap-northeast-1,ecsgroup2,ecsCodeDeployRole,my-second-service,my-prod-cluster,tg-ecs,tg-ecs2,ecs-test-alb,80,HTTP,8080,HTTP
+remove,another-app,ap-northeast-1,another-group,ecsCodeDeployRole,another-service,another-cluster,tg-another-blue,tg-another-green,another-alb,80,HTTP,8080,HTTP

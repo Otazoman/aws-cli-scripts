@@ -7,6 +7,53 @@ usage() {
     exit 1
 }
 
+# ターゲットグループ名またはARNからターゲットグループARNを取得する関数
+get_target_group_arn() {
+    local tg_identifier=$1
+    local region=$2
+
+    # デバッグメッセージは標準エラー出力に出す
+    echo "デバッグ: ターゲットグループ識別子 '$tg_identifier' をリージョン '$region' で解決中..." >&2
+
+    # 既にARN形式かどうかチェック
+    if [[ "$tg_identifier" =~ ^arn:aws:elasticloadbalancing:.* ]]; then
+        echo "デバッグ: ターゲットグループ識別子 '$tg_identifier' は既にARN形式です。" >&2
+        echo "$tg_identifier" # これだけを標準出力に
+        return 0
+    fi
+
+    echo "デバッグ: aws elbv2 describe-target-groups --names \"$tg_identifier\" --query 'TargetGroups[0].TargetGroupArn' --output text --region \"$region\" を実行します。" >&2
+    
+    tg_info=$(aws elbv2 describe-target-groups \
+        --names "$tg_identifier" \
+        --query 'TargetGroups[0].TargetGroupArn' \
+        --output text \
+        --region "$region" 2>&1)
+
+    echo "デバッグ: 'aws elbv2 describe-target-groups' コマンドの生出力: '$tg_info'" >&2
+    
+    if [[ "$tg_info" == "" ]]; then
+        echo "エラー: AWS CLIターゲットグループ検索結果が空です。コマンドが失敗した可能性があります。" >&2
+        return 1
+    fi
+    if echo "$tg_info" | grep -q "^An error occurred"; then
+        echo "エラー: AWS CLIターゲットグループ検索中にエラーが発生しました: $tg_info" >&2
+        return 1
+    fi
+
+    tg_arn="$tg_info" 
+    echo "デバッグ: 解決されたターゲットグループARN (変数内): '$tg_arn'" >&2
+
+    if [[ "$tg_arn" != "None" && -n "$tg_arn" ]]; then
+        echo "デバッグ: ターゲットグループ名 '$tg_identifier' はARN '$tg_arn' に解決されました。" >&2
+        echo "$tg_arn" # これだけを標準出力に
+        return 0
+    fi
+
+    echo "エラー: リージョン '$region' でターゲットグループ名 '$tg_identifier' をARNに解決できませんでした。存在するターゲットグループ名か、正しいリージョンか確認してください。" >&2
+    return 1
+}
+
 # サブネット名またはIDからサブネットIDを取得する関数
 get_subnet_id() {
     local subnet_identifier=$1
@@ -152,7 +199,7 @@ do
 
     # DisableScaleIn のブール値を 'true'/'false' に変換
     LOCAL_DISABLE_SCALE_IN="false"
-    if [[ "$DISABLE_SCALE_IN_BOOLEAN" == "true" ]]; then
+    if [[ "$(echo "$DISABLE_SCALE_IN_BOOLEAN" | tr '[:upper:]' '[:lower:]')" == "true" ]]; then
         LOCAL_DISABLE_SCALE_IN="true"
     fi
 
@@ -170,9 +217,6 @@ do
         # サブネットの解決
         VPC_ZONE_IDENTIFIER=""
         SUBNETS_RESOLVED_OK=true
-        # IFS=';' を一時的に設定して、セミコロン区切りで読み込む
-        # (IFS=';'; read -ra ADDR <<< "$SUBNETS") # サブネットはセミコロン区切り
-
         ADDR=(${SUBNETS//;/ })
         for i in "${ADDR[@]}"; do
             if [[ -z "$i" ]]; then # 空のサブネット識別子をスキップ
@@ -198,23 +242,29 @@ do
         echo "デバッグ: 解決されたVPCZoneIdentifier: '$VPC_ZONE_IDENTIFIER'"
 
 
-        # タグの構築
-        TAGS_PARAM_ARR=()
+        # タグの構築（ASG作成時に適用）
+        TAGS_ARGS=""
         if [[ -n "$TAGS" ]]; then
-            (IFS=';'; read -ra TAG_PARTS <<< "$TAGS")
+            # セミコロンで分割
+            IFS=';' read -ra TAG_PARTS <<< "$TAGS"
             for tag_part in "${TAG_PARTS[@]}"; do
-                if [[ "$tag_part" =~ ^([^=]+)=([^,]+)(,PropagateAtLaunch=(true|false))?$ ]]; then
+                # タグ部分をキー、値、PropagateAtLaunchに分解
+                if [[ "$tag_part" =~ ^([^=]+)=([^=]+)(,PropagateAtLaunch=(true|false))?$ ]]; then
                     tag_key="${BASH_REMATCH[1]}"
                     tag_value="${BASH_REMATCH[2]}"
-                    propagate_at_launch="${BASH_REMATCH[4]:-true}"
-                    TAGS_PARAM_ARR+=("ResourceId=$AUTOSCALING_GROUP_NAME,ResourceType=auto-scaling-group,Key=$tag_key,Value=$tag_value,PropagateAtLaunch=$propagate_at_launch")
+                    propagate_at_launch="${BASH_REMATCH[4]:-true}"  # デフォルトはtrue
+                    
+                    # タグパラメータを作成（ASG作成時に使用する形式）
+                    if [[ -z "$TAGS_ARGS" ]]; then
+                        TAGS_ARGS="--tags Key=${tag_key},Value=${tag_value},PropagateAtLaunch=${propagate_at_launch}"
+                    else
+                        TAGS_ARGS="$TAGS_ARGS Key=${tag_key},Value=${tag_value},PropagateAtLaunch=${propagate_at_launch}"
+                    fi
                 else
-                    echo "警告: 不正なタグ形式 '$tag_part' です。スキップします。"
+                    echo "警告: 不正なタグ形式 '$tag_part' です。正しい形式は 'Key=Value' または 'Key=Value,PropagateAtLaunch=true|false' です。このタグをスキップします。"
                 fi
             done
         fi
-        # 配列の要素をスペース区切りで結合し、末尾のスペースを除去
-        TAGS_PARAM=$(printf '%s ' "${TAGS_PARAM_ARR[@]}" | sed 's/ $//')
 
 
         # create-auto-scaling-group コマンドの構築
@@ -227,7 +277,7 @@ do
         CREATE_ASG_CMD+=" --desired-capacity $DESIRED_CAPACITY"
         CREATE_ASG_CMD+=" --vpc-zone-identifier \"$VPC_ZONE_IDENTIFIER\""
 
-        if [[ "$CAPACITY_REBALANCE" == "true" ]]; then
+        if [[ $(echo "$CAPACITY_REBALANCE" | tr '[:upper:]' '[:lower:]') == "true" ]]; then
             CREATE_ASG_CMD+=" --capacity-rebalance"
         fi
 
@@ -248,12 +298,12 @@ do
             echo "設定されるメンテナンスポリシー: $LOCAL_INSTANCE_MAINTENANCE_POLICY"
         fi
 
-        if [[ "$NEW_INSTANCES_PROTECTED_FROM_SCALE_IN" == "true" ]]; then
+        if [[ "$(echo "$NEW_INSTANCES_PROTECTED_FROM_SCALE_IN" | tr '[:upper:]' '[:lower:]')" == "true" ]]; then
             CREATE_ASG_CMD+=" --new-instances-protected-from-scale-in"
         fi
 
-        if [[ -n "$TAGS_PARAM" ]]; then
-            CREATE_ASG_CMD+=" --tags ${TAGS_PARAM}"
+        if [[ -n "$TAGS_ARGS" ]]; then
+            CREATE_ASG_CMD+=" ${TAGS_ARGS}"
         fi
 
         # ロードバランサーへのアタッチ (ALB/NLB ターゲットグループ)
@@ -262,7 +312,33 @@ do
             # 空白のみのTARGET_GROUP_ARNSを避けるため、トリムしてからチェック
             CLEAN_TARGET_GROUP_ARNS=$(echo "$TARGET_GROUP_ARNS" | xargs)
             if [[ -n "$CLEAN_TARGET_GROUP_ARNS" ]]; then
-                CREATE_ASG_CMD+=" --target-group-arns \"$CLEAN_TARGET_GROUP_ARNS\""
+                # ターゲットグループが名前で指定されている場合はARNに解決する
+                RESOLVED_TARGET_GROUP_ARNS=""
+                TGARNS_RESOLVED_OK=true
+                IFS=';' read -ra TG_PARTS <<< "$CLEAN_TARGET_GROUP_ARNS"
+                for tg_part in "${TG_PARTS[@]}"; do
+                    if [[ -z "$tg_part" ]]; then # 空のターゲットグループ識別子をスキップ
+                        continue
+                    fi
+                    TG_ARN=$(get_target_group_arn "$tg_part" "$REGION")
+                    if [[ $? -ne 0 ]]; then
+                        echo "ターゲットグループ解決エラー: '$tg_part' の解決に失敗しました。"
+                        TGARNS_RESOLVED_OK=false
+                        break # 1つでも解決に失敗したらループを抜ける
+                    fi
+                    if [[ -z "$RESOLVED_TARGET_GROUP_ARNS" ]]; then
+                        RESOLVED_TARGET_GROUP_ARNS="$TG_ARN"
+                    else
+                        RESOLVED_TARGET_GROUP_ARNS="${RESOLVED_TARGET_GROUP_ARNS},${TG_ARN}"
+                    fi
+                done
+                
+                if [[ "$TGARNS_RESOLVED_OK" == "true" && -n "$RESOLVED_TARGET_GROUP_ARNS" ]]; then
+                    echo "デバッグ: 解決されたターゲットグループARN: '$RESOLVED_TARGET_GROUP_ARNS'"
+                    CREATE_ASG_CMD+=" --target-group-arns \"$RESOLVED_TARGET_GROUP_ARNS\""
+                else
+                    echo "警告: ターゲットグループの解決に失敗しました。ターゲットグループの設定をスキップします。"
+                fi
             fi
         fi
 

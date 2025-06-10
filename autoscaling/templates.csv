@@ -1,0 +1,6 @@
+ACTION,REGION,TEMPLATE_NAME,IMAGEID,INSTANCE_TYPE,VERSION_DESCRIPTION,TARGET_VERSION
+add,ap-northeast-1,my-template-for-auto-scaling,ami-026c39f4021df9abe,t3.micro,Initial Creation,
+add,ap-northeast-1,my-template-v2-2,ami-0abcde1234567890f,t2.small,First Version,
+add,ap-northeast-1,my-template-for-auto-scaling,ami-026c39f4021df9abe,t3.medium,Updated Instance Type,
+add,ap-northeast-1,my-template-v2-2,ami-0abcde1234567890f,t2.small,Updated AMI,
+add,ap-northeast-1,my-template-for-auto-scaling,ami-026c39f4021df9abe,t3.small,Updated Instance Type,

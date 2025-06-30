@@ -1,4 +1,8 @@
-ACTION,APPLICATION_NAME,AWS_REGION,DEPLOYMENT_GROUP_NAME,ROLE_NAME,SERVICE_NAME,CLUSTER_NAME,TARGET_GROUP_NAME_BLUE,TARGET_GROUP_NAME_GREEN,LB_NAME,PROD_LISTENER_PORT,PROD_LISTENER_PROTOCOL,TEST_LISTENER_PORT,TEST_LISTENER_PROTOCOL
-remove,ecsdeploysample,ap-northeast-1,ecsgroup1,ecsCodeDeployRole,my-first-service,my-prod-cluster,tg-ecs,tg-ecs2,ecs-test-alb,80,HTTP,8080,HTTP
-remove,ecsdeploysample,ap-northeast-1,ecsgroup2,ecsCodeDeployRole,my-second-service,my-prod-cluster,tg-ecs,tg-ecs2,ecs-test-alb,80,HTTP,8080,HTTP
-remove,another-app,ap-northeast-1,another-group,ecsCodeDeployRole,another-service,another-cluster,tg-another-blue,tg-another-green,another-alb,80,HTTP,8080,HTTP
+ACTION,COMPUTE_PLATFORM,APPLICATION_NAME,AWS_REGION,DEPLOYMENT_GROUP_NAME,ROLE_NAME,TAGS,SERVICE_NAME,CLUSTER_NAME,TARGET_GROUP_NAME_BLUE,TARGET_GROUP_NAME_GREEN,LB_NAME,PROD_LISTENER_PORT,PROD_LISTENER_PROTOCOL,TEST_LISTENER_PORT,TEST_LISTENER_PROTOCOL,AUTO_SCALING_GROUP,DEPLOYMENT_CONFIG,EC2_TAG_KEY,EC2_TAG_VALUE,EC2_TAG_TYPE,LAMBDA_ALIAS,CURRENT_VERSION,TARGET_VERSION
+add,ECS,ecsdeploysample,ap-northeast-1,ecsgroup1,ecsCodeDeployRole,env:prod;service:web;owner:devteam;project:webapp,my-first-service,my-prod-cluster,tg-ecs,tg-ecs2,ecs-test-alb,80,HTTP,8080,HTTP,,,,,,,,
+add,ECS,ecsdeploysample,ap-northeast-1,ecsgroup2,ecsCodeDeployRole,env:stg;service:web;project:webapp,my-second-service,my-prod-cluster,tg-ecs,tg-ecs2,ecs-test-alb,80,HTTP,8080,HTTP,,,,,,,,
+add,ECS,another-app,ap-northeast-1,another-group,ecsCodeDeployRole,env:dev;project:demo,another-service,another-cluster,tg-another-blue,tg-another-green,another-alb,80,HTTP,8080,HTTP,,,,,,,,
+add,EC2,ec2deploysample,ap-northeast-1,ec2group1,ec2CodeDeployRole,env:prod;service:api;team:backend,,,,,,,,,webASG,CodeDeployDefault.AllAtOnce,Environment,Production,KEY_AND_VALUE,,,
+add,EC2,ec2backend,ap-northeast-1,backendgroup,ec2CodeDeployRole,env:dev;service:backend;component:database,,,,,,,,,,,Role,Backend,KEY_ONLY,,,
+add,Lambda,lambdafunction,ap-northeast-1,lambdagroup1,lambdaCodeDeployRole,env:dev;service:func;feature:auth,,,,,,,,,,,,,,,PROD,1,2
+remove,ECS,oldapplication,ap-northeast-1,oldgroup,ecsCodeDeployRole,,,,,,,,,,,,,,,,,,

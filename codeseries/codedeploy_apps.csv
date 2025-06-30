@@ -1,7 +1,7 @@
 ACTION,COMPUTE_PLATFORM,APPLICATION_NAME,AWS_REGION,DEPLOYMENT_GROUP_NAME,ROLE_NAME,TAGS,SERVICE_NAME,CLUSTER_NAME,TARGET_GROUP_NAME_BLUE,TARGET_GROUP_NAME_GREEN,LB_NAME,PROD_LISTENER_PORT,PROD_LISTENER_PROTOCOL,TEST_LISTENER_PORT,TEST_LISTENER_PROTOCOL,AUTO_SCALING_GROUP,DEPLOYMENT_CONFIG,EC2_TAG_KEY,EC2_TAG_VALUE,EC2_TAG_TYPE,LAMBDA_ALIAS,CURRENT_VERSION,TARGET_VERSION
-add,ECS,ecsdeploysample,ap-northeast-1,ecsgroup1,ecsCodeDeployRole,env:prod;service:web;owner:devteam;project:webapp,my-first-service,my-prod-cluster,tg-ecs,tg-ecs2,ecs-test-alb,80,HTTP,8080,HTTP,,,,,,,,
-add,ECS,ecsdeploysample,ap-northeast-1,ecsgroup2,ecsCodeDeployRole,env:stg;service:web;project:webapp,my-second-service,my-prod-cluster,tg-ecs,tg-ecs2,ecs-test-alb,80,HTTP,8080,HTTP,,,,,,,,
-add,ECS,another-app,ap-northeast-1,another-group,ecsCodeDeployRole,env:dev;project:demo,another-service,another-cluster,tg-another-blue,tg-another-green,another-alb,80,HTTP,8080,HTTP,,,,,,,,
-add,EC2,ec2deploysample,ap-northeast-1,backendgroup,ec2CodeDeployRole,env:prod;service:api;team:backend,,,tg-ec2,tg-ec2-2,ec2-test-alb,80,HTTP,8080,HTTP,my-autoscaling-group-1,CodeDeployDefault.AllAtOnce,Environment,Dev,KEY_AND_VALUE,,,
-add,EC2,ec2backend,ap-northeast-1,ec2,ec2CodeDeployRole,env:dev;service:backend;component:database,,,,,,,,,,,,Role,Backend,KEY_ONLY,,,
-add,Lambda,lambdafunction,ap-northeast-1,lambdagroup1,lambdaCodeDeployRole,env:dev;service:func;feature:auth,,,,,,,,,,,,,,,PROD,1,2
+add,ECS,ecsdeploysample,ap-northeast-1,ecsgroup1,ecsCodeDeployRole,env:prod;service:web;owner:devteam;project:webapp,my-first-service,my-prod-cluster,tg-ecs,tg-ecs2,ecs-test-alb,80,HTTP,8080,HTTP,,CodeDeployDefault.ECSAllAtOnce,,,,,,
+add,ECS,ecsdeploysample,ap-northeast-1,ecsgroup2,ecsCodeDeployRole,env:stg;service:web;project:webapp,my-second-service,my-prod-cluster,tg-ecs,tg-ecs2,ecs-test-alb,80,HTTP,8080,HTTP,,CodeDeployDefault.ECSAllAtOnce,,,,,,
+add,ECS,another-app,ap-northeast-1,another-group,ecsCodeDeployRole,env:dev;project:demo,another-service,another-cluster,tg-another-blue,tg-another-green,another-alb,80,HTTP,8080,HTTP,,CodeDeployDefault.ECSAllAtOnce,,,,,,
+add,Server,ec2deploysample,ap-northeast-1,backendgroup,ec2CodeDeployRole,env:prod;service:api;team:backend,,,tg-ec2,tg-ec2-2,ec2-test-alb,80,HTTP,8080,HTTP,my-autoscaling-group-1,CodeDeployDefault.AllAtOnce,Environment,Dev,KEY_AND_VALUE,,,
+add,Server,ec2backend,ap-northeast-1,ec2,ec2CodeDeployRole,env:dev;service:backend;component:database,,,,,,,,,,,,Role,,KEY_ONLY,,,
+add,Lambda,lambdafunction,ap-northeast-1,lambdagroup1,lambdaCodeDeployRole,env:dev;service:func;feature:auth,,,,,,,,,,,CodeDeployDefault.LambdaAllAtOnce,,,,PROD,1,2

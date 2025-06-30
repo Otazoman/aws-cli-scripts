@@ -6,7 +6,7 @@ function usage() {
   echo "  <csv_file>: CSVファイルへのパス"
   echo ""
   echo "CSVファイルの書式:"
-  echo "  - COMPUTE_PLATFORM: ECS, EC2, LAMBDAのいずれかを指定"
+  echo "  - COMPUTE_PLATFORM: ECS, Server, Lambdaのいずれかを指定"
   echo "  - TAGS: キー1:値1;キー2:値2;キー3:値3 (セミコロンで区切り)"
   echo "  - EC2_TAG_TYPE: KEY_ONLY, VALUE_ONLY, KEY_AND_VALUEのいずれか"
   exit 1
@@ -278,7 +278,7 @@ tail -n +2 "$CSV_FILE" | grep -v "^#" | awk -F, '{ gsub(/\r/, ""); print }' | wh
             --application-name "${APPLICATION_NAME}" \
             --deployment-group-name "${DEPLOYMENT_GROUP_NAME}" \
             --service-role-arn "${CODEDEPLOY_SERVICE_ROLE_ARN}" \
-            --deployment-config-name CodeDeployDefault.ECSAllAtOnce \
+            --deployment-config-name "${DEPLOYMENT_CONFIG}" \
             --ecs-services "serviceName=${SERVICE_NAME},clusterName=${CLUSTER_NAME}" \
             --load-balancer-info "{
               \"targetGroupPairInfoList\":[
@@ -312,53 +312,48 @@ tail -n +2 "$CSV_FILE" | grep -v "^#" | awk -F, '{ gsub(/\r/, ""); print }' | wh
             ${DG_TAG_ARRAY_CLI[@]:+--tags "${DG_TAG_ARRAY_CLI[@]}"}
           ;;
           
-        "EC2")
-          # EC2の場合の処理
-          # デプロイメント設定がない場合はデフォルト値を使用
-          if [ -z "$DEPLOYMENT_CONFIG" ]; then
-            DEPLOYMENT_CONFIG="CodeDeployDefault.OneAtATime"
-          fi
+      "Server")
+        # EC2(Server)の場合の処理
+        # デプロイメント設定がない場合はデフォルト値を使用
+        if [ -z "$DEPLOYMENT_CONFIG" ]; then
+          DEPLOYMENT_CONFIG="CodeDeployDefault.OneAtATime"
+        fi
+        # コマンドを組み立てるための配列を初期化
+        # まずは必須の引数をすべて追加
+        CMD_ARGS=(
+            "aws" "deploy" "create-deployment-group"
+            "--region" "${AWS_REGION}"
+            "--application-name" "${APPLICATION_NAME}"
+            "--deployment-group-name" "${DEPLOYMENT_GROUP_NAME}"
+            "--service-role-arn" "${CODEDEPLOY_SERVICE_ROLE_ARN}"
+            "--deployment-config-name" "${DEPLOYMENT_CONFIG}"
+            "--auto-rollback-configuration" '{"enabled":true,"events":["DEPLOYMENT_FAILURE"]}'
+            "--alarm-configuration" '{"enabled":false,"alarms":[]}'
+        )
 
-          # EC2デプロイグループ作成のベースコマンド
-          EC2_DEPLOY_GROUP_CMD="aws deploy create-deployment-group \
-            --region \"${AWS_REGION}\" \
-            --application-name \"${APPLICATION_NAME}\" \
-            --deployment-group-name \"${DEPLOYMENT_GROUP_NAME}\" \
-            --service-role-arn \"${CODEDEPLOY_SERVICE_ROLE_ARN}\" \
-            --deployment-config-name \"${DEPLOYMENT_CONFIG}\" \
-            --auto-rollback-configuration '{\"enabled\":true,\"events\":[\"DEPLOYMENT_FAILURE\"]}' \
-            --alarm-configuration '{\"enabled\":false,\"alarms\":[]}'"
+        # Auto Scaling Groupが指定されている場合、配列に引数を追加
+        if [ ! -z "$AUTO_SCALING_GROUP" ]; then
+          echo "Auto Scaling Group '${AUTO_SCALING_GROUP}' を使用します"
+          CMD_ARGS+=("--auto-scaling-groups" "${AUTO_SCALING_GROUP}")
+        fi
 
-          # Auto Scaling Groupが指定されている場合
-          if [ ! -z "$AUTO_SCALING_GROUP" ]; then
-            echo "Auto Scaling Group '${AUTO_SCALING_GROUP}' を使用します"
-            EC2_DEPLOY_GROUP_CMD="${EC2_DEPLOY_GROUP_CMD} --auto-scaling-groups \"${AUTO_SCALING_GROUP}\""
-          fi
+        # EC2タグフィルターが指定されている場合、配列に引数を追加
+        if [ ! -z "$EC2_TAG_KEY" ] && [ ! -z "$EC2_TAG_TYPE" ]; then
+          echo "EC2タグフィルターを使用します: キー='${EC2_TAG_KEY}', 値='${EC2_TAG_VALUE}', タイプ='${EC2_TAG_TYPE}'"
+          # 複数のタグフィルターを将来的にサポートする場合は、ここをループ処理にする
+          CMD_ARGS+=("--ec2-tag-filters" "Key=${EC2_TAG_KEY},Value=${EC2_TAG_VALUE},Type=${EC2_TAG_TYPE}")
+        fi
 
-          # EC2タグフィルターが指定されている場合
-          if [ ! -z "$EC2_TAG_KEY" ] && [ ! -z "$EC2_TAG_TYPE" ]; then
-            echo "EC2タグフィルターを使用します: キー='${EC2_TAG_KEY}', 値='${EC2_TAG_VALUE}', タイプ='${EC2_TAG_TYPE}'"
-            EC2_DEPLOY_GROUP_CMD="${EC2_DEPLOY_GROUP_CMD} --ec2-tag-filters Key=${EC2_TAG_KEY},Value=${EC2_TAG_VALUE},Type=${EC2_TAG_TYPE}"
-          fi
+        # デプロイグループ用のタグが指定されている場合、配列に引数を追加
+        # (この部分は既に配列 DG_TAG_ARRAY_CLI を使っているので、それを活用する)
+        if [ ${#DG_TAG_ARRAY_CLI[@]} -gt 0 ]; then
+          CMD_ARGS+=("--tags" "${DG_TAG_ARRAY_CLI[@]}")
+        fi
 
-          # タグが指定されている場合
-          if [ ! -z "$DG_TAG_ARGS" ]; then
-            EC2_DEPLOY_GROUP_CMD="${EC2_DEPLOY_GROUP_CMD} --tags ${DG_TAG_ARGS}"
-          fi
-
-          # コマンド実行
-          aws deploy create-deployment-group \
-            --region "${AWS_REGION}" \
-            --application-name "${APPLICATION_NAME}" \
-            --deployment-group-name "${DEPLOYMENT_GROUP_NAME}" \
-            --service-role-arn "${CODEDEPLOY_SERVICE_ROLE_ARN}" \
-            --deployment-config-name "${DEPLOYMENT_CONFIG}" \
-            --auto-rollback-configuration '{"enabled":true,"events":["DEPLOYMENT_FAILURE"]}' \
-            --alarm-configuration '{"enabled":false,"alarms":[]}' \
-            ${AUTO_SCALING_GROUP:+"--auto-scaling-groups \"${AUTO_SCALING_GROUP}\""} \
-            ${EC2_TAG_KEY:+"--ec2-tag-filters Key=${EC2_TAG_KEY},Value=${EC2_TAG_VALUE},Type=${EC2_TAG_TYPE}"} \
-            ${DG_TAG_ARRAY_CLI[@]:+--tags "${DG_TAG_ARRAY_CLI[@]}"}
-          ;;
+        # 組み立てたコマンドを実行
+        # "${CMD_ARGS[@]}" とすることで、各要素が正しくクォートされて安全に渡される
+        "${CMD_ARGS[@]}"
+        ;;
           
         "Lambda")
           # Lambda用のデプロイグループ作成
@@ -369,18 +364,6 @@ tail -n +2 "$CSV_FILE" | grep -v "^#" | awk -F, '{ gsub(/\r/, ""); print }' | wh
           
           echo "Lambda関数 '${APPLICATION_NAME}' のデプロイグループを作成します"
           echo "エイリアス: ${LAMBDA_ALIAS}, 現在バージョン: ${CURRENT_VERSION}, ターゲットバージョン: ${TARGET_VERSION}"
-          
-          # # タグを処理するために配列を初期化
-          # DG_TAG_ARRAY=()
-          # if [ ! -z "$TAGS" ]; then
-          #     IFS=';' read -ra TAG_ARRAY_RAW <<< "$TAGS"
-          #     for TAG in "${TAG_ARRAY_RAW[@]}"; do
-          #         KEY=$(echo "$TAG" | cut -d':' -f1)
-          #         VALUE=$(echo "$TAG" | cut -d':' -f2)
-          #         # "Key=キー,Value=値" の形式で配列に要素を追加
-          #         DG_TAG_ARRAY+=("Key=${KEY},Value=${VALUE}")
-          #     done
-          # fi
 
           aws deploy create-deployment-group \
             --region "${AWS_REGION}" \
@@ -390,7 +373,7 @@ tail -n +2 "$CSV_FILE" | grep -v "^#" | awk -F, '{ gsub(/\r/, ""); print }' | wh
             --deployment-style '{"deploymentType":"BLUE_GREEN","deploymentOption":"WITH_TRAFFIC_CONTROL"}' \
             --auto-rollback-configuration '{"enabled":true,"events":["DEPLOYMENT_FAILURE"]}' \
             --alarm-configuration '{"enabled":false,"alarms":[]}' \
-            --deployment-config-name "CodeDeployDefault.LambdaAllAtOnce" \
+            --deployment-config-name "${DEPLOYMENT_CONFIG}" \
             ${DG_TAG_ARRAY_CLI[@]:+--tags "${DG_TAG_ARRAY_CLI[@]}"}
           ;;
           

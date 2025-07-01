@@ -1,4 +1,11 @@
-#TION` | 実行する操作を指定します。 | 必須 | `add` (作成/更新) または `remove` (削除) を指定します。 |
+
+# CSV
+
+## codebuild_projects.csv
+
+| 列名 | 説明 | 必須/任意 | 補足 |
+| :--- | :--- | :--- | :--- |
+| `ACTION` | 実行する操作を指定します。 | 必須 | `add` (作成/更新) または `remove` (削除) を指定します。 |
 | `PROJECT_NAME` | CodeBuildプロジェクトの名前。 | 必須 | |
 | `SOURCE_TYPE` | ソースプロバイダーのタイプ。 | 必須 | `S3`, `CODECOMMIT`, `GITHUB`, `GITHUB_ENTERPRISE`, `BITBUCKET` など。 |
 | `SOURCE_LOCATION` | ソースコードの場所。 | 必須 | `S3`の場合は `バケット名/オブジェクトキー`、`GITHUB`の場合はリポジトリのHTTPSクローンURLを指定します。 |
@@ -10,7 +17,6 @@
 | `ARTIFACTS_TYPE` | ビルド成果物のタイプ。 | 必須 | `NO_ARTIFACTS` (成果物なし) または `S3` を指定します。 |
 | `ARTIFACTS_LOCATION` | ビルド成果物の出力先。 | `ARTIFACTS_TYPE`が`S3`の場合必須 | S3バケット名を指定します。バケットが存在しない場合はスクリプトが作成を試みます。 |
 | `AWS_REGION` | プロジェクトを作成するAWSリージョン。 | 任意 | 未指定の場合は、スクリプト内で定義されたデフォルトリージョン (`ap-northeast-1`) が使用されます。 |
-
 
 ## codedeploy_apps.csv  
 

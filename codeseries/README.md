@@ -47,7 +47,3 @@
 | `CURRENT_VERSION` | 現在のトラフィックが向いているLambdaのバージョン。 | `Lambda`の場合必須 | |
 | `TARGET_VERSION` | 新しくデプロイするLambdaのバージョン。 | `Lambda`の場合必須 | |
 | `DEPLOYMENT_TYPE` | EC2 (`Server`) のデプロイタイプ。 | `Server`の場合必須 | `BLUE_GREEN` または `IN_PLACE` を指定します。 |
-
-## codebuild_projects.csv  
-
-

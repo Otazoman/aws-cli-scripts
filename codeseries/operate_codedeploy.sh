@@ -9,6 +9,7 @@ function usage() {
   echo "  - COMPUTE_PLATFORM: ECS, Server, Lambdaのいずれかを指定"
   echo "  - TAGS: キー1:値1;キー2:値2;キー3:値3 (セミコロンで区切り)"
   echo "  - EC2_TAG_TYPE: KEY_ONLY, VALUE_ONLY, KEY_AND_VALUEのいずれか"
+  echo "  - DEPLOYMENT_TYPE: (Serverの場合) BLUE_GREEN, IN_PLACEのいずれかを指定"
   exit 1
 }
 
@@ -61,6 +62,7 @@ tail -n +2 "$CSV_FILE" | grep -v "^#" | awk -F, '{ gsub(/\r/, ""); print }' | wh
   LAMBDA_ALIAS=$(echo "$LINE" | awk -F, '{print $22}')
   CURRENT_VERSION=$(echo "$LINE" | awk -F, '{print $23}')
   TARGET_VERSION=$(echo "$LINE" | awk -F, '{print $24}')
+  DEPLOYMENT_TYPE=$(echo "$LINE" | awk -F, '{print $25}')
 
 
   echo "----------------------------------------------------"
@@ -312,48 +314,120 @@ tail -n +2 "$CSV_FILE" | grep -v "^#" | awk -F, '{ gsub(/\r/, ""); print }' | wh
             ${DG_TAG_ARRAY_CLI[@]:+--tags "${DG_TAG_ARRAY_CLI[@]}"}
           ;;
           
-      "Server")
-        # EC2(Server)の場合の処理
-        # デプロイメント設定がない場合はデフォルト値を使用
-        if [ -z "$DEPLOYMENT_CONFIG" ]; then
-          DEPLOYMENT_CONFIG="CodeDeployDefault.OneAtATime"
-        fi
-        # コマンドを組み立てるための配列を初期化
-        # まずは必須の引数をすべて追加
-        CMD_ARGS=(
-            "aws" "deploy" "create-deployment-group"
-            "--region" "${AWS_REGION}"
-            "--application-name" "${APPLICATION_NAME}"
-            "--deployment-group-name" "${DEPLOYMENT_GROUP_NAME}"
-            "--service-role-arn" "${CODEDEPLOY_SERVICE_ROLE_ARN}"
-            "--deployment-config-name" "${DEPLOYMENT_CONFIG}"
-            "--auto-rollback-configuration" '{"enabled":true,"events":["DEPLOYMENT_FAILURE"]}'
-            "--alarm-configuration" '{"enabled":false,"alarms":[]}'
-        )
+        "Server")
+          # EC2(Server)の場合の処理
+          # デプロイメント設定がない場合はデフォルト値を使用
+          if [ -z "$DEPLOYMENT_CONFIG" ]; then
+            DEPLOYMENT_CONFIG="CodeDeployDefault.OneAtATime"
+          fi
 
-        # Auto Scaling Groupが指定されている場合、配列に引数を追加
-        if [ ! -z "$AUTO_SCALING_GROUP" ]; then
-          echo "Auto Scaling Group '${AUTO_SCALING_GROUP}' を使用します"
-          CMD_ARGS+=("--auto-scaling-groups" "${AUTO_SCALING_GROUP}")
-        fi
+          # DEPLOYMENT_TYPEに応じて処理を分岐
+          case "$DEPLOYMENT_TYPE" in
+            "BLUE_GREEN")
+              echo "EC2 Blue/Greenデプロイを開始します..."
+              # Blue/Greenデプロイの場合はロードバランサー情報が必須
+              if [ -z "$TARGET_GROUP_NAME_BLUE" ] || [ -z "$TARGET_GROUP_NAME_GREEN" ] || \
+                 [ -z "$LB_NAME" ] || [ -z "$PROD_LISTENER_PORT" ] || \
+                 [ -z "$PROD_LISTENER_PROTOCOL" ] || [ -z "$TEST_LISTENER_PORT" ] || \
+                 [ -z "$TEST_LISTENER_PROTOCOL" ]; then
+                echo "エラー: EC2 Blue/Greenデプロイには、TARGET_GROUP_NAME_BLUE, TARGET_GROUP_NAME_GREEN, LB_NAME, PROD_LISTENER_PORT, PROD_LISTENER_PROTOCOL, TEST_LISTENER_PORT, TEST_LISTENER_PROTOCOL がすべて必要です。デプロイグループの作成をスキップします。"
+                continue
+              fi
 
-        # EC2タグフィルターが指定されている場合、配列に引数を追加
-        if [ ! -z "$EC2_TAG_KEY" ] && [ ! -z "$EC2_TAG_TYPE" ]; then
-          echo "EC2タグフィルターを使用します: キー='${EC2_TAG_KEY}', 値='${EC2_TAG_VALUE}', タイプ='${EC2_TAG_TYPE}'"
-          # 複数のタグフィルターを将来的にサポートする場合は、ここをループ処理にする
-          CMD_ARGS+=("--ec2-tag-filters" "Key=${EC2_TAG_KEY},Value=${EC2_TAG_VALUE},Type=${EC2_TAG_TYPE}")
-        fi
+              # ターゲットグループARNの取得 (Blue)
+              echo "ターゲットグループ '${TARGET_GROUP_NAME_BLUE}' (Blue) のARNを取得中..."
+              TG_ARN_BLUE=$(aws elbv2 describe-target-groups --names "${TARGET_GROUP_NAME_BLUE}" --query 'TargetGroups[0].TargetGroupArn' --output text --region "${AWS_REGION}")
+              if [ -z "$TG_ARN_BLUE" ]; then echo "エラー: ターゲットグループ '${TARGET_GROUP_NAME_BLUE}' が見つかりません。"; continue; fi
+              echo "ターゲットグループARN (Blue): ${TG_ARN_BLUE}"
 
-        # デプロイグループ用のタグが指定されている場合、配列に引数を追加
-        # (この部分は既に配列 DG_TAG_ARRAY_CLI を使っているので、それを活用する)
-        if [ ${#DG_TAG_ARRAY_CLI[@]} -gt 0 ]; then
-          CMD_ARGS+=("--tags" "${DG_TAG_ARRAY_CLI[@]}")
-        fi
+              # ターゲットグループARNの取得 (Green)
+              echo "ターゲットグループ '${TARGET_GROUP_NAME_GREEN}' (Green) のARNを取得中..."
+              TG_ARN_GREEN=$(aws elbv2 describe-target-groups --names "${TARGET_GROUP_NAME_GREEN}" --query 'TargetGroups[0].TargetGroupArn' --output text --region "${AWS_REGION}")
+              if [ -z "$TG_ARN_GREEN" ]; then echo "エラー: ターゲットグループ '${TARGET_GROUP_NAME_GREEN}' が見つかりません。"; continue; fi
+              echo "ターゲットグループARN (Green): ${TG_ARN_GREEN}"
 
-        # 組み立てたコマンドを実行
-        # "${CMD_ARGS[@]}" とすることで、各要素が正しくクォートされて安全に渡される
-        "${CMD_ARGS[@]}"
-        ;;
+              # ロードバランサーARNの取得
+              echo "ロードバランサー名 '${LB_NAME}' のARNを取得中..."
+              LB_ARN=$(aws elbv2 describe-load-balancers --names "${LB_NAME}" --query 'LoadBalancers[0].LoadBalancerArn' --output text --region "${AWS_REGION}")
+              if [ -z "$LB_ARN" ]; then echo "エラー: ロードバランサー '${LB_NAME}' が見つかりません。"; continue; fi
+              echo "ロードバランサーARN: ${LB_ARN}"
+
+              # プロダクションリスナーARNの取得
+              echo "プロダクションリスナーARNを取得中..."
+              LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn "${LB_ARN}" --query "Listeners[?Port==\`${PROD_LISTENER_PORT}\` && Protocol=='${PROD_LISTENER_PROTOCOL}'].ListenerArn" --output text --region "${AWS_REGION}")
+              if [ -z "$LISTENER_ARN" ]; then echo "エラー: プロダクションリスナー (ポート: ${PROD_LISTENER_PORT}) が見つかりません。"; continue; fi
+              echo "プロダクションリスナーARN: ${LISTENER_ARN}"
+
+              # テストリスナーARNの取得
+              echo "テストリスナーARNを取得中..."
+              TEST_LISTENER_ARN=$(aws elbv2 describe-listeners --load-balancer-arn "${LB_ARN}" --query "Listeners[?Port==\`${TEST_LISTENER_PORT}\` && Protocol=='${TEST_LISTENER_PROTOCOL}'].ListenerArn" --output text --region "${AWS_REGION}")
+              if [ -z "$TEST_LISTENER_ARN" ]; then echo "エラー: テストリスナー (ポート: ${TEST_LISTENER_PORT}) が見つかりません。"; continue; fi
+              echo "テストリスナーARN: ${TEST_LISTENER_ARN}"
+
+              # コマンドを組み立てる
+              CMD_ARGS=(
+                  "aws" "deploy" "create-deployment-group"
+                  "--region" "${AWS_REGION}"
+                  "--application-name" "${APPLICATION_NAME}"
+                  "--deployment-group-name" "${DEPLOYMENT_GROUP_NAME}"
+                  "--service-role-arn" "${CODEDEPLOY_SERVICE_ROLE_ARN}"
+                  "--deployment-config-name" "${DEPLOYMENT_CONFIG}"
+                  "--auto-rollback-configuration" "{\"enabled\":true,\"events\":[\"DEPLOYMENT_FAILURE\"]}"
+                  "--alarm-configuration" "{\"enabled\":false,\"alarms\":[]}"
+                  "--load-balancer-info" "{\"targetGroupInfoList\":[{\"name\":\"${TARGET_GROUP_NAME_BLUE}\"},{\"name\":\"${TARGET_GROUP_NAME_GREEN}\"}]}"
+                  "--blue-green-deployment-configuration" "{\"terminateBlueInstancesOnDeploymentSuccess\":{\"action\":\"TERMINATE\",\"terminationWaitTimeInMinutes\":5},\"deploymentReadyOption\":{\"actionOnTimeout\":\"CONTINUE_DEPLOYMENT\",\"waitTimeInMinutes\":0}}"
+                  "--deployment-style" "deploymentType=BLUE_GREEN,deploymentOption=WITH_TRAFFIC_CONTROL"
+              )
+              ;;
+
+            "IN_PLACE")
+              echo "EC2 In-Placeデプロイを開始します..."
+              # インプレースデプロイの場合、ロードバランサーは任意
+              CMD_ARGS=(
+                  "aws" "deploy" "create-deployment-group"
+                  "--region" "${AWS_REGION}"
+                  "--application-name" "${APPLICATION_NAME}"
+                  "--deployment-group-name" "${DEPLOYMENT_GROUP_NAME}"
+                  "--service-role-arn" "${CODEDEPLOY_SERVICE_ROLE_ARN}"
+                  "--deployment-config-name" "${DEPLOYMENT_CONFIG}"
+                  "--auto-rollback-configuration" "{\"enabled\":true,\"events\":[\"DEPLOYMENT_FAILURE\"]}"
+                  "--alarm-configuration" "{\"enabled\":false,\"alarms\":[]}"
+                  "--deployment-style" "deploymentType=IN_PLACE,deploymentOption=WITHOUT_TRAFFIC_CONTROL"
+              )
+              
+              # ロードバランサーが指定されていれば追加
+              if [ ! -z "$TARGET_GROUP_NAME_BLUE" ]; then
+                echo "ロードバランサーターゲットグループ '${TARGET_GROUP_NAME_BLUE}' を使用します"
+                CMD_ARGS+=("--load-balancer-info" "{\"targetGroupInfoList\":[{\"name\":\"${TARGET_GROUP_NAME_BLUE}\"}]}")
+              fi
+              ;;
+
+            *)
+              echo "エラー: Serverプラットフォームでは、DEPLOYMENT_TYPEに 'BLUE_GREEN' または 'IN_PLACE' を指定してください。"
+              continue
+              ;;
+          esac
+
+          # Auto Scaling Groupが指定されている場合、配列に引数を追加
+          if [ ! -z "$AUTO_SCALING_GROUP" ]; then
+            echo "Auto Scaling Group '${AUTO_SCALING_GROUP}' を使用します"
+            CMD_ARGS+=("--auto-scaling-groups" "${AUTO_SCALING_GROUP}")
+          fi
+
+          # EC2タグフィルターが指定されている場合、配列に引数を追加
+          if [ ! -z "$EC2_TAG_KEY" ] && [ ! -z "$EC2_TAG_TYPE" ]; then
+            echo "EC2タグフィルターを使用します: キー='${EC2_TAG_KEY}', 値='${EC2_TAG_VALUE}', タイプ='${EC2_TAG_TYPE}'"
+            CMD_ARGS+=("--ec2-tag-filters" "Key=${EC2_TAG_KEY},Value=${EC2_TAG_VALUE},Type=${EC2_TAG_TYPE}")
+          fi
+
+          # デプロイグループ用のタグが指定されている場合、配列に引数を追加
+          if [ ${#DG_TAG_ARRAY_CLI[@]} -gt 0 ]; then
+            CMD_ARGS+=("--tags" "${DG_TAG_ARRAY_CLI[@]}")
+          fi
+
+          # 組み立てたコマンドを実行
+          "${CMD_ARGS[@]}"
+          ;;
           
         "Lambda")
           # Lambda用のデプロイグループ作成
@@ -392,26 +466,6 @@ tail -n +2 "$CSV_FILE" | grep -v "^#" | awk -F, '{ gsub(/\r/, ""); print }' | wh
       echo "デプロイグループ '${DEPLOYMENT_GROUP_NAME}' は既に存在します。スキップします。"
     fi
   fi
-  # タグ情報を詳細表示
-  if [ ! -z "$TAGS" ]; then
-    echo "アプリケーションのタグ: ${TAGS}"
-    echo "  タグ形式: キー:値 (複数タグはセミコロン区切り)"
-    
-    # タグの詳細情報を表示
-    IFS=';' read -ra TAG_ARRAY <<< "$TAGS"
-    echo "  設定されたタグ数: ${#TAG_ARRAY[@]}"
-    for i in "${!TAG_ARRAY[@]}"; do
-      TAG=${TAG_ARRAY[$i]}
-      KEY=$(echo $TAG | cut -d':' -f1)
-      VALUE=$(echo $TAG | cut -d':' -f2)
-      echo "  - タグ $((i+1)): キー='${KEY}', 値='${VALUE}'"
-    done
-  else
-    echo "タグは設定されていません"
-  fi
-  
-  echo "" # 空行を追加して見やすくする
-
 done
 
 echo "スクリプトが完了しました。"

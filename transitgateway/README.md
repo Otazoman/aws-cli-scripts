@@ -1,4 +1,4 @@
-# AWS Transit Gateway (TGW) 動的構築スクリプト
+# AWS Transit Gateway 構築スクリプト
 
 ## 1. 概要
 
@@ -133,3 +133,4 @@
 | `VPC_1_ENI_SUBNET_CIDRS` | 上記サブネットのCIDRブロック。スペース区切りで、名前の数と一致させる必要があります。 |
 | `VPC_1_ENI_SUBNET_AZS` | 上記サブネットのアベイラビリティゾーン。スペース区切りで、名前の数と一致させる必要があります。 |
 | `VPC_1_CROSS_ACCOUNT_RAM_SHARE_NAME` | **クロスアカウント接続の場合のみ設定。** RAMでTGWを共有する際のリソース共有名を指定します。 |
+

@@ -144,34 +144,28 @@ function process_vpc_attachment() {
         log "TGW ARN: ${TGW_ARN}"
         
         # RAM共有の状態を含めて確認（削除済みの共有は除外）
-        SHARE_ARN=$(aws_cmd "${TGW_REGION}" ram get-resource-shares --resource-owner SELF --name "${RAM_SHARE_NAME}" --query "resourceShares[?status=='ACTIVE'][0].resourceShareArn")
-        SHARE_STATUS=$(aws_cmd "${TGW_REGION}" ram get-resource-shares --resource-owner SELF --name "${RAM_SHARE_NAME}" --query "resourceShares[?status=='ACTIVE'][0].status")
-        
+        SHARE_INFO=$(aws_cmd "${TGW_REGION}" ram get-resource-shares --resource-owner SELF --name "${RAM_SHARE_NAME}" --query "resourceShares[?status=='ACTIVE' || status=='PENDING'][0].[resourceShareArn,status]")
+        SHARE_ARN=$(echo "${SHARE_INFO}" | cut -f1)
+        SHARE_STATUS=$(echo "${SHARE_INFO}" | cut -f2)
+
         log "既存のRAM共有確認: ARN=${SHARE_ARN}, STATUS=${SHARE_STATUS}"
-        
+
         if [ -z "${SHARE_ARN}" ] || [ "${SHARE_ARN}" == "None" ]; then
             log "RAM共有 ${RAM_SHARE_NAME} を作成中..."
-            CREATE_RESULT=$(aws_cmd "${TGW_REGION}" ram create-resource-share --name "${RAM_SHARE_NAME}" --resource-arns "${TGW_ARN}" --principals "${ACCOUNT_ID}" --query 'resourceShare.resourceShareArn')
-            log "RAM共有作成結果: ${CREATE_RESULT}"
-            log "RAM共有 ${RAM_SHARE_NAME} を作成しました。アカウント ${ACCOUNT_ID} での承認が必要です。"
+            SHARE_ARN=$(aws_cmd "${TGW_REGION}" ram create-resource-share --name "${RAM_SHARE_NAME}" --resource-arns "${TGW_ARN}" --principals "${ACCOUNT_ID}" --query 'resourceShare.resourceShareArn')
+            log "RAM共有 ${RAM_SHARE_NAME} (ARN: ${SHARE_ARN}) を作成しました。アカウント ${ACCOUNT_ID} での承認が必要です。"
         else
             log "RAM共有 ${RAM_SHARE_NAME} は既に存在します (ARN: ${SHARE_ARN}, STATUS: ${SHARE_STATUS})。"
             # 既存の共有にプリンシパルとリソースを関連付ける (冪等性のため)
             log "既存の共有にプリンシパルとリソースを関連付け中..."
-            aws_cmd "${TGW_REGION}" ram associate-resource-share --resource-share-arn "${SHARE_ARN}" --principals "${ACCOUNT_ID}" >/dev/null 2>&1
-            aws_cmd "${TGW_REGION}" ram associate-resource-share --resource-share-arn "${SHARE_ARN}" --resource-arns "${TGW_ARN}" >/dev/null 2>&1
+            aws_cmd "${TGW_REGION}" ram associate-resource-share --resource-share-arn "${SHARE_ARN}" --principals "${ACCOUNT_ID}" --resource-arns "${TGW_ARN}" >/dev/null 2>&1
             log "関連付けが完了しました。"
         fi
-    elif [ -n "${RAM_SHARE_NAME}" ]; then
-        if [ -z "${ACCOUNT_ID}" ]; then
-            log "VPC ${INDEX} のアカウントIDが設定されていないため、RAM共有 '${RAM_SHARE_NAME}' の作成をスキップします。"
-        elif [ "${CURRENT_ACCOUNT_ID}" == "${ACCOUNT_ID}" ]; then
-            log "VPC ${INDEX} は同一アカウント内のため、RAM共有 '${RAM_SHARE_NAME}' の作成をスキップします。"
-        else
-            log "VPC ${INDEX} のRAM共有作成条件が満たされていません。"
-        fi
+    # このelifブロックは先行するif条件のカバレッジにより、ACCOUNT_IDが空の場合のみに限定される
+    elif [ -n "${RAM_SHARE_NAME}" ] && [ -z "${ACCOUNT_ID}" ]; then
+        log "VPC ${INDEX} のアカウントIDが設定されていないため、RAM共有 '${RAM_SHARE_NAME}' の作成をスキップします。"
     else
-        log "VPC ${INDEX} にはRAM共有設定がないため、処理をスキップします。"
+        log "VPC ${INDEX} にはRAM共有設定がないため、クロスアカウント処理をスキップします。"
     fi
     
     # 現在のアカウントがVPCのアカウントと一致しない場合は処理終了（RAM共有のみ作成済み）
@@ -217,8 +211,7 @@ function process_ram_share_creation_for_vpc() {
             log "RAM共有 ${RAM_SHARE_NAME} を作成しました。アカウント ${SPOKE_ACCOUNT_ID} での承認が必要です。"
         else
             log "RAM共有 ${RAM_SHARE_NAME} (ARN: ${SHARE_ARN}) は既に存在します。プリンシパルとリソースを関連付けます..."
-            aws_cmd "${TGW_REGION}" ram associate-resource-share --resource-share-arn "${SHARE_ARN}" --principals "${SPOKE_ACCOUNT_ID}" >/dev/null 2>&1
-            aws_cmd "${TGW_REGION}" ram associate-resource-share --resource-share-arn "${SHARE_ARN}" --resource-arns "${TGW_ARN}" >/dev/null 2>&1
+            aws_cmd "${TGW_REGION}" ram associate-resource-share --resource-share-arn "${SHARE_ARN}" --principals "${SPOKE_ACCOUNT_ID}" --resource-arns "${TGW_ARN}" >/dev/null 2>&1
         fi
     fi
 }
@@ -287,8 +280,23 @@ function process_spoke_vpc_attachment() {
     if [ -n "${INVITATION_ARN}" ] && [ "${INVITATION_ARN}" != "None" ]; then
         log "PENDING状態の招待 (${INVITATION_ARN}) を承認します..."
         aws_cmd "${TGW_REGION}" ram accept-resource-share-invitation --resource-share-invitation-arn "${INVITATION_ARN}"
-        log "招待を承認しました。共有がACTIVEになるのを待ちます..."
-        sleep 15
+        
+        # 共有がACTIVEになるのを待機
+        log "共有 '${RAM_SHARE_NAME}' がACTIVEになるのを待機中..."
+        local start_time=$(date +%s)
+        while true; do
+            local share_status
+            share_status=$(aws_cmd "${TGW_REGION}" ram get-resource-shares --resource-owner OTHER-ACCOUNTS --name "${RAM_SHARE_NAME}" --query "resourceShares[?status=='ACTIVE'].status | [0]")
+            if [ "${share_status}" == "ACTIVE" ]; then
+                log "共有 '${RAM_SHARE_NAME}' がACTIVEになりました。"
+                break
+            fi
+            local current_time=$(date +%s)
+            if [ $((current_time - start_time)) -gt 300 ]; then
+                error "共有 '${RAM_SHARE_NAME}' のACTIVE化がタイムアウトしました。"
+            fi
+            sleep 10
+        done
     else
         log "PENDING状態の招待は見つかりませんでした。既に承認済みか確認します。"
     fi
@@ -296,57 +304,37 @@ function process_spoke_vpc_attachment() {
     # 2. 共有されたTGWのIDを取得（複数の方法でフォールバック）
     log "TGW検索条件: HUB_ACCOUNT_ID=${HUB_ACCOUNT_ID}, TGW_NAME=${TGW_NAME}, TGW_REGION=${TGW_REGION}"
     
-    # まず RAM共有の状況を確認
-    log "RAM共有の状況確認中..."
-    aws_cmd "${TGW_REGION}" ram get-resource-share-invitations --query "resourceShareInvitations[?resourceShareName=='${RAM_SHARE_NAME}'].[resourceShareName,status,resourceShareArn]" --output table 2>/dev/null || log "RAM招待情報取得に失敗"
+    # 2. 共有されたTGWのIDを取得（より信頼性の高い方法で）
+    # `get-resource-shares` を使用して、指定された名前と所有者(ハブアカウント)から共有リソースのARNを特定する
+    log "共有されているTGWリソースを検索中 (Owner: ${HUB_ACCOUNT_ID}, Name: ${RAM_SHARE_NAME})..."
+    SHARED_TGW_ARN=$(aws_cmd "${TGW_REGION}" ram list-resources --resource-owner OTHER-ACCOUNTS --resource-share-arns \
+        "$(aws_cmd "${TGW_REGION}" ram get-resource-shares --name "${RAM_SHARE_NAME}" --resource-owner OTHER-ACCOUNTS --query "resourceShares[?status=='ACTIVE'].resourceShareArn | [0]")" \
+        --resource-type "ec2:TransitGateway" --query "resources[0].arn" 2>/dev/null)
     
-    # 共有リソースを直接検索
-    log "共有されているTGWリソースを検索中..."
-    SHARED_RESOURCES=$(aws_cmd "${TGW_REGION}" ram get-shared-resources --resource-owner OTHER-ACCOUNTS --resource-type "ec2:TransitGateway" --query 'resources[*].arn' 2>/dev/null || echo "")
-    log "検出された共有TGWリソース: ${SHARED_RESOURCES}"
-    
+    log "検出された共有TGWリソースARN: ${SHARED_TGW_ARN}"
+
     local SHARED_TGW_ID=""
-    
-    # 共有リソースからTGW IDを抽出
-    if [ -n "${SHARED_RESOURCES}" ] && [ "${SHARED_RESOURCES}" != "None" ]; then
-        SHARED_TGW_ID=$(echo "${SHARED_RESOURCES}" | grep -o 'tgw-[a-z0-9]*' | head -n1)
-        log "共有リソースから抽出したTGW ID: ${SHARED_TGW_ID}"
+    if [ -n "${SHARED_TGW_ARN}" ] && [ "${SHARED_TGW_ARN}" != "None" ]; then
+        # ARNからTGW IDを抽出 (例: arn:aws:ec2:ap-northeast-1:123456789012:transit-gateway/tgw-0123456789abcdef0)
+        SHARED_TGW_ID=$(echo "${SHARED_TGW_ARN}" | awk -F'/' '{print $2}')
+        log "共有リソースARNから抽出したTGW ID: ${SHARED_TGW_ID}"
     fi
     
-    # フォールバック: Owner IDでTGWを直接検索
+    # フォールバック: Owner IDとNameタグでTGWを直接検索
     if [ -z "${SHARED_TGW_ID}" ] || [ "${SHARED_TGW_ID}" == "None" ]; then
-        log "フォールバック: Owner IDでTGWを直接検索..."
-        ALL_TGWS=$(aws_cmd "${TGW_REGION}" ec2 describe-transit-gateways --filters "Name=owner-id,Values=${HUB_ACCOUNT_ID}" --query 'TransitGateways[*].[TransitGatewayId,Description,State]' --output table 2>/dev/null || echo "")
-        log "ハブアカウントの全TGW:\n${ALL_TGWS}"
-        
-        SHARED_TGW_ID=$(aws_cmd "${TGW_REGION}" ec2 describe-transit-gateways --filters "Name=owner-id,Values=${HUB_ACCOUNT_ID}" "Name=state,Values=available" --query 'TransitGateways[0].TransitGatewayId' 2>/dev/null)
-        log "Owner ID検索結果: ${SHARED_TGW_ID}"
+        log "フォールバック: Owner ID (${HUB_ACCOUNT_ID}) と TGW Name (${TGW_NAME}) でTGWを直接検索..."
+        SHARED_TGW_ID=$(aws_cmd "${TGW_REGION}" ec2 describe-transit-gateways --filters "Name=owner-id,Values=${HUB_ACCOUNT_ID}" "Name=tag:Name,Values=${TGW_NAME}" "Name=state,Values=available" --query 'TransitGateways[0].TransitGatewayId' 2>/dev/null)
+        log "Owner IDとNameタグでの検索結果: ${SHARED_TGW_ID}"
     fi
     
     # 最終確認
     if [ -n "${SHARED_TGW_ID}" ] && [ "${SHARED_TGW_ID}" != "None" ]; then
         log "共有されたTGW ID: ${SHARED_TGW_ID} を検出しました。"
-        
-        # TGWの詳細を確認
-        TGW_DETAILS=$(aws_cmd "${TGW_REGION}" ec2 describe-transit-gateways --transit-gateway-ids "${SHARED_TGW_ID}" --query 'TransitGateways[0].[TransitGatewayId,State,OwnerId,Description]' --output table 2>/dev/null || echo "")
+        TGW_DETAILS=$(aws_cmd "${TGW_REGION}" ec2 describe-transit-gateways --transit-gateway-ids "${SHARED_TGW_ID}" --query 'TransitGateways[0].[TransitGatewayId,State,OwnerId,Description]' 2>/dev/null || echo "")
         log "検出されたTGWの詳細:\n${TGW_DETAILS}"
     else
-        # デバッグ情報を表示してからエラー終了
-        log "デバッグ情報:"
-        log "- 現在のアカウントID: ${CURRENT_ACCOUNT_ID}"
-        log "- ハブアカウントID: ${HUB_ACCOUNT_ID}"
-        log "- RAM共有名: ${RAM_SHARE_NAME}"
-        log "- TGWリージョン: ${TGW_REGION}"
-        
-        # 全RAM共有状況を確認
-        log "全RAM共有状況:"
-        aws_cmd "${TGW_REGION}" ram get-resource-shares --resource-owner OTHER-ACCOUNTS --query 'resourceShares[*].[name,status,resourceShareArn]' --output table 2>/dev/null || log "RAM共有取得に失敗"
-        
-        error "共有されたTGW IDを検出できませんでした。上記のデバッグ情報を確認してください。"
+        error "共有されたTGW IDを検出できませんでした。RAM共有が承認済みで、TGW Name (${TGW_NAME}) が正しいか確認してください。"
     fi
-    
-    # グローバル配列を汚染しないよう、ローカル変数として管理
-    # TGW_IDS[${TGW_INDEX}]=${SHARED_TGW_ID}  # この行を削除してグローバル汚染を防ぐ
 
     # 3. TGW用サブネットの作成
     read -ra SUBNET_NAMES <<< "${SUBNET_NAMES_STR}"
@@ -368,12 +356,13 @@ function process_spoke_vpc_attachment() {
     # 4. TGWアタッチメントの作成
     log "VPCアタッチメントを検索中: TGW=${SHARED_TGW_ID}, VPC=${VPC_ID}, NAME=${ATTACHMENT_NAME}"
     
-    # 削除済み状態のアタッチメントを除外して検索
-    ATTACHMENT_ID=$(aws_cmd "${TGW_REGION}" ec2 describe-transit-gateway-vpc-attachments --filters "Name=transit-gateway-id,Values=${SHARED_TGW_ID}" "Name=vpc-id,Values=${VPC_ID}" --query "TransitGatewayVpcAttachments[?State!='deleted' && State!='deleting'].TransitGatewayAttachmentId | [0]")
-    
-    # Nameタグでの検索もバックアップとして実行
+    # より詳細なNameタグでの検索を先に実行
+    ATTACHMENT_ID=$(aws_cmd "${TGW_REGION}" ec2 describe-transit-gateway-vpc-attachments --filters "Name=transit-gateway-id,Values=${SHARED_TGW_ID}" "Name=vpc-id,Values=${VPC_ID}" "Name=tag:Name,Values=${ATTACHMENT_NAME}" --query "TransitGatewayVpcAttachments[?State!='deleted' && State!='deleting'].TransitGatewayAttachmentId | [0]")
+
+    # バックアップとしてNameタグなしで検索
     if [ -z "${ATTACHMENT_ID}" ] || [ "${ATTACHMENT_ID}" == "None" ]; then
-        ATTACHMENT_ID=$(aws_cmd "${TGW_REGION}" ec2 describe-transit-gateway-vpc-attachments --filters "Name=transit-gateway-id,Values=${SHARED_TGW_ID}" "Name=vpc-id,Values=${VPC_ID}" "Name=tag:Name,Values=${ATTACHMENT_NAME}" --query "TransitGatewayVpcAttachments[?State!='deleted' && State!='deleting'].TransitGatewayAttachmentId | [0]")
+        log "Nameタグ付きのアタッチメントが見つからないため、タグなしで再検索します。"
+        ATTACHMENT_ID=$(aws_cmd "${TGW_REGION}" ec2 describe-transit-gateway-vpc-attachments --filters "Name=transit-gateway-id,Values=${SHARED_TGW_ID}" "Name=vpc-id,Values=${VPC_ID}" --query "TransitGatewayVpcAttachments[?State!='deleted' && State!='deleting'].TransitGatewayAttachmentId | [0]")
     fi
     
     log "アタッチメント検索結果: ${ATTACHMENT_ID}"
@@ -402,6 +391,8 @@ function process_peering() {
     eval "local NAME=\${PEERING_${INDEX}_NAME}"
     eval "local TGW_A_ACCOUNT_VAR=\${TGW_${TGW_A_IDX}_ACCOUNT_ID_VAR}"
     eval "local TGW_A_ACCOUNT_ID=\${${TGW_A_ACCOUNT_VAR}}"
+    eval "local TGW_B_ACCOUNT_VAR=\${TGW_${TGW_B_IDX}_ACCOUNT_ID_VAR}"
+    eval "local TGW_B_ACCOUNT_ID=\${${TGW_B_ACCOUNT_VAR}}"
     
     # このピアリングが現在のハブアカウントに関連しているか確認
     if [ "${CURRENT_ACCOUNT_ID}" != "${TGW_A_ACCOUNT_ID}" ]; then
@@ -422,7 +413,7 @@ function process_peering() {
     
     if [ -z "${PEERING_A_ID}" ] || [ "${PEERING_A_ID}" == "None" ]; then
         log "ピアリングアタッチメント (${NAME}) を ${TGW_A_REGION} で作成中..."
-        PEERING_A_ID=$(aws_cmd "${TGW_A_REGION}" ec2 create-transit-gateway-peering-attachment --transit-gateway-id "${TGW_A_ID}" --peer-transit-gateway-id "${TGW_B_ID}" --peer-region "${TGW_B_REGION}" --peer-account-id "${TGW_A_ACCOUNT_ID}" --tag-specifications "ResourceType=transit-gateway-attachment,Tags=[{Key=Name,Value=${NAME}},${TAGS}]" --query 'TransitGatewayPeeringAttachment.TransitGatewayAttachmentId')
+        PEERING_A_ID=$(aws_cmd "${TGW_A_REGION}" ec2 create-transit-gateway-peering-attachment --transit-gateway-id "${TGW_A_ID}" --peer-transit-gateway-id "${TGW_B_ID}" --peer-region "${TGW_B_REGION}" --peer-account-id "${TGW_B_ACCOUNT_ID}" --tag-specifications "ResourceType=transit-gateway-attachment,Tags=[{Key=Name,Value=${NAME}},${TAGS}]" --query 'TransitGatewayPeeringAttachment.TransitGatewayAttachmentId')
         wait_for_state "${TGW_A_REGION}" "transit-gateway-peering-attachment" "${PEERING_A_ID}" "pendingAcceptance" "TransitGatewayPeeringAttachments[0].State"
     fi
 
@@ -516,16 +507,20 @@ function configure_vpc_routes() {
         eval "local HUB_ACCOUNT_ID=\${${HUB_ACCOUNT_ID_VAR}}"
         
         # 共有リソースから検索
-        SHARED_RESOURCES=$(aws_cmd "${TGW_REGION}" ram get-shared-resources --resource-owner OTHER-ACCOUNTS --resource-type "ec2:TransitGateway" --query 'resources[*].arn' 2>/dev/null || echo "")
-        if [ -n "${SHARED_RESOURCES}" ] && [ "${SHARED_RESOURCES}" != "None" ]; then
-            TGW_ID=$(echo "${SHARED_RESOURCES}" | grep -o 'tgw-[a-z0-9]*' | head -n1)
-            log "共有リソースから取得したTGW ID: ${TGW_ID}"
+        eval "local TGW_NAME=\${TGW_${TGW_IDX}_NAME}"
+        # 共有リソースから検索 (process_spoke_vpc_attachmentと同じロジック)
+        SHARED_TGW_ARN=$(aws_cmd "${TGW_REGION}" ram list-resources --resource-owner OTHER-ACCOUNTS --resource-share-arns \
+            "$(aws_cmd "${TGW_REGION}" ram get-resource-shares --name "${RAM_SHARE_NAME}" --resource-owner OTHER-ACCOUNTS --query "resourceShares[?status=='ACTIVE'].resourceShareArn | [0]")" \
+            --resource-type "ec2:TransitGateway" --query "resources[0].arn" 2>/dev/null)
+        if [ -n "${SHARED_TGW_ARN}" ] && [ "${SHARED_TGW_ARN}" != "None" ]; then
+            TGW_ID=$(echo "${SHARED_TGW_ARN}" | awk -F'/' '{print $2}')
+            log "共有リソースARNから取得したTGW ID: ${TGW_ID}"
         fi
         
-        # フォールバック: Owner IDで検索
+        # フォールバック: Owner IDとNameタグで検索
         if [ -z "${TGW_ID}" ] || [ "${TGW_ID}" == "None" ]; then
-            TGW_ID=$(aws_cmd "${TGW_REGION}" ec2 describe-transit-gateways --filters "Name=owner-id,Values=${HUB_ACCOUNT_ID}" "Name=state,Values=available" --query 'TransitGateways[0].TransitGatewayId' 2>/dev/null)
-            log "Owner ID検索から取得したTGW ID: ${TGW_ID}"
+            TGW_ID=$(aws_cmd "${TGW_REGION}" ec2 describe-transit-gateways --filters "Name=owner-id,Values=${HUB_ACCOUNT_ID}" "Name=tag:Name,Values=${TGW_NAME}" "Name=state,Values=available" --query 'TransitGateways[0].TransitGatewayId' 2>/dev/null)
+            log "Owner IDとNameタグ検索から取得したTGW ID: ${TGW_ID}"
         fi
     fi
 

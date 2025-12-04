@@ -50,6 +50,10 @@ wait_for_state() {
             "transit-gateway-peering-attachment")
                 CURRENT_STATE=$(aws_cmd "${REGION}" ec2 describe-transit-gateway-peering-attachments --transit-gateway-attachment-ids "${RESOURCE_ID}" --query "${QUERY}" 2>/dev/null)
                 ;;
+            "ram-share")
+                # RESOURCE_ID for ram-share is the RAM Share Name
+                CURRENT_STATE=$(aws_cmd "${REGION}" ram get-resource-shares --resource-owner OTHER-ACCOUNTS --name "${RESOURCE_ID}" --query "${QUERY}" 2>/dev/null)
+                ;;
         esac
 
         if [ "${CURRENT_STATE}" == "${TARGET_STATE}" ]; then
@@ -281,24 +285,11 @@ function process_spoke_vpc_attachment() {
         log "PENDING状態の招待 (${INVITATION_ARN}) を承認します..."
         aws_cmd "${TGW_REGION}" ram accept-resource-share-invitation --resource-share-invitation-arn "${INVITATION_ARN}"
         
-        # 共有がACTIVEになるのを待機
-        log "共有 '${RAM_SHARE_NAME}' がACTIVEになるのを待機中..."
-        local start_time=$(date +%s)
-        while true; do
-            local share_status
-            share_status=$(aws_cmd "${TGW_REGION}" ram get-resource-shares --resource-owner OTHER-ACCOUNTS --name "${RAM_SHARE_NAME}" --query "resourceShares[?status=='ACTIVE'].status | [0]")
-            if [ "${share_status}" == "ACTIVE" ]; then
-                log "共有 '${RAM_SHARE_NAME}' がACTIVEになりました。"
-                break
-            fi
-            local current_time=$(date +%s)
-            if [ $((current_time - start_time)) -gt 300 ]; then
-                error "共有 '${RAM_SHARE_NAME}' のACTIVE化がタイムアウトしました。"
-            fi
-            sleep 10
-        done
+        # 共有がACTIVEになるのを汎用待機関数で待つ
+        local query="resourceShares[?name=='${RAM_SHARE_NAME}'].status | [0]"
+        wait_for_state "${TGW_REGION}" "ram-share" "${RAM_SHARE_NAME}" "ACTIVE" "${query}"
     else
-        log "PENDING状態の招待は見つかりませんでした。既に承認済みか確認します。"
+        log "PENDING状態の招待は見つかりませんでした。"
     fi
 
     # 2. 共有されたTGWのIDを取得（複数の方法でフォールバック）
